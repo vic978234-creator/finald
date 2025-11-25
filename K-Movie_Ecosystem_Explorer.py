@@ -3,6 +3,8 @@ import pandas as pd
 import requests
 from collections import defaultdict
 import plotly.express as px
+from operator import itemgetter
+from datetime import datetime
 
 # ===============================================
 # 1. 환경 설정 및 데이터 정의 (KOBIS API 사용)
@@ -11,7 +13,7 @@ import plotly.express as px
 # --- API KEY ---
 # KOBIS API에서 발급받은 두 가지 키를 여기에 직접 입력합니다.
 # -----------------------------------------------------------
-# 1. 영화 목록 (LIST) API 키: searchMovieList 호출에 사용 (사용자 키 적용)
+# 1. 영화 목록 (LIST) API 키: searchMovieList 호출에 사용 (사용자 키 적용 완료)
 KOBIS_LIST_KEY = "cc5c76f4946f878b829af9b116062ad4" 
 
 # 2. 영화 상세 정보 (DETAIL) API 키: searchMovieInfo 호출에 사용 (사용자 키 적용)
@@ -28,29 +30,40 @@ DETAIL_URL = "http://www.kobis.or.kr/kobisopenapi/webservice/rest/movie/searchMo
 # ===============================================
 
 @st.cache_data(show_spinner="🎬 1단계: 초기 영화 목록을 불러오는 중...")
-def fetch_movie_list(list_key):
+def fetch_movie_list(list_key, start_year):
     """
     KOBIS 영화 목록 API를 호출하여 영화 코드 리스트를 가져옵니다.
+    :param start_year: 최소 개봉 연도 (YYYY)
     """
-    if not list_key or list_key == "YOUR_LIST_API_KEY_HERE":
-        st.error("🚨 영화 목록 키가 설정되지 않았습니다. 작업을 중단합니다.")
+    if not list_key or len(list_key) != 32: 
+        st.error("🚨 KOBIS LIST API 키가 유효하지 않습니다. 32자리 키를 확인해 주세요.")
         return None
         
-    params = {'key': list_key, 'itemPerPage': 100} # 최대 100개 영화
+    params = {
+        'key': list_key, 
+        'itemPerPage': 1000, # <--- 100개에서 1000개로 수정
+        'openStartDt': f"{start_year}0101" # 개봉일자 필터 적용
+    }
+    
     try:
         response = requests.get(LIST_URL, params=params, timeout=10)
         response.raise_for_status() 
         data = response.json()
+        
+        if 'faultInfo' in data:
+            st.error(f"❌ 1단계 API 호출 오류: {data['faultInfo'].get('message', '알 수 없는 오류')}")
+            return None
+            
         movie_list = data.get('movieListResult', {}).get('movieList', [])
-        st.success(f"1단계 완료: 총 {len(movie_list)}개의 영화 코드를 가져왔습니다.")
+        st.success(f"1단계 완료: 총 {len(movie_list)}개의 영화 코드를 가져왔습니다. (개봉일: {start_year}년 이후)")
         return movie_list
     except requests.exceptions.RequestException as e:
-        st.error(f"❌ 1단계 API 요청 중 오류 발생: {e}")
+        st.error(f"❌ 1단계 API 요청 중 네트워크/연결 오류 발생: {e}")
         return None
 
 def fetch_movie_details(detail_key, movie_code):
     """영화 상세 정보(관객수, 회사, 감독)를 가져옵니다."""
-    if not detail_key or detail_key == "YOUR_DETAIL_API_KEY_HERE":
+    if not detail_key or len(detail_key) != 32:
         return None 
         
     params = {'key': detail_key, 'movieCd': movie_code}
@@ -58,16 +71,25 @@ def fetch_movie_details(detail_key, movie_code):
         response = requests.get(DETAIL_URL, params=params, timeout=10)
         response.raise_for_status()
         data = response.json()
+        
+        if 'faultInfo' in data:
+             return None
+             
         return data.get('movieInfoResult', {}).get('movieInfo', {})
     except requests.exceptions.RequestException:
         return None
 
-def get_full_analysis_data(list_key, detail_key):
+def get_full_analysis_data(list_key, detail_key, start_year):
     """1, 2단계 API 호출을 통합하고 데이터 분석을 위한 DataFrame을 생성합니다."""
-    movie_list_data = fetch_movie_list(list_key)
+    
+    if not list_key or not detail_key:
+        return None 
+        
+    # start_year 인수를 fetch_movie_list에 전달
+    movie_list_data = fetch_movie_list(list_key, start_year)
     
     if movie_list_data is None:
-        return None # 데이터가 없으면 None 반환
+        return None 
 
     st.markdown("---")
     st.subheader("🎬 2단계: 상세 정보 및 관계 데이터 수집 중...")
@@ -79,27 +101,25 @@ def get_full_analysis_data(list_key, detail_key):
     for i, movie in enumerate(movie_list_data):
         movie_code = movie['movieCd']
         
-        # 상세 정보 호출 시 DETAIL 키 사용
         detail_info = fetch_movie_details(detail_key, movie_code)
         
         if detail_info:
-            # audiCnt가 없으면 '0', 있으면 콤마 제거 후 정수 변환
             audi_cnt = 0
             audi_cnt_str = detail_info.get('audiCnt', '0')
             try:
                 if audi_cnt_str:
+                    # 콤마 제거 후 정수로 변환 시도
                     audi_cnt = int(audi_cnt_str.replace(',', ''))
             except ValueError:
-                audi_cnt = 0
+                audi_cnt = 0 # 변환 실패 시 0으로 처리
 
-            # 영화 레코드 저장
             record = {
                 'movieNm': detail_info.get('movieNm', movie['movieNm']),
                 'audiCnt': audi_cnt,
                 'openDt': detail_info.get('openDt', '정보 없음'),
             }
             
-            # 감독 정보 추출
+            # 감독 정보 추출 (KeyError 방지를 위해 .get 사용)
             directors = [(d['peopleNm'], detail_info['movieNm'], audi_cnt) for d in detail_info.get('directors', [])]
             record['directors'] = directors
             
@@ -109,7 +129,7 @@ def get_full_analysis_data(list_key, detail_key):
                 # 제작사와 배급사만 포함
                 role = company.get('companyPartNm', '')
                 if '제작' in role or '배급' in role:
-                    companies.append((company['companyNm'], detail_info['movieNm'], audi_cnt, role))
+                    companies.append((company.get('companyNm', '미상'), detail_info['movieNm'], audi_cnt, role))
             record['companies'] = companies
             
             movie_records.append(record)
@@ -124,16 +144,13 @@ def get_full_analysis_data(list_key, detail_key):
 
 def analyze_hitmaker_index(movie_records, entity_type='Director'):
     """
-    수집된 데이터를 기반으로 감독 또는 회사의 평균 흥행 지수를 계산합니다.
+    수집된 데이터를 기반으로 감독 또는 회사의 평균 흥행 지수를 계산하고 DataFrame을 생성합니다.
     """
-    entity_data = defaultdict(lambda: {'total_audience': 0, 'movie_count': 0, 'movies': []})
+    entity_data = defaultdict(lambda: {'total_audience': 0, 'movie_count': 0})
     
     for movie in movie_records:
-        if entity_type == 'Director':
-            entities = movie['directors']
-        elif entity_type == 'Company':
-            entities = movie['companies']
-        else:
+        entities = movie.get('directors') if entity_type == 'Director' else movie.get('companies')
+        if not entities:
             continue
 
         for entity_tuple in entities:
@@ -156,18 +173,20 @@ def analyze_hitmaker_index(movie_records, entity_type='Director'):
                 'Avg_Audience': int(avg_audience),
             })
 
-    # --- [수정된 부분] results 리스트가 비어있는지 확인 ---
+    # KeyError: 'Avg_Audience' 방지: results가 비어있으면 빈 DataFrame 반환
     if not results:
-        # 이 경우, 흥행 기록이 있는 영화를 찾지 못했음을 의미합니다.
         return pd.DataFrame() 
-    # --- [수정된 부분 끝] ---
 
     # Avg_Audience를 기준으로 내림차순 정렬
-    df = pd.DataFrame(results).sort_values(by='Avg_Audience', ascending=False).reset_index(drop=True)
+    try:
+        df = pd.DataFrame(results).sort_values(by='Avg_Audience', ascending=False).reset_index(drop=True)
+    except KeyError:
+        st.error("데이터프레임 구조 오류: 분석 키('Avg_Audience')를 찾을 수 없습니다.")
+        return pd.DataFrame()
+
     df.index = df.index + 1
     df.index.name = 'Rank'
     
-    # 누적 관객 수와 평균 관객 수를 보기 좋게 포맷팅
     df['Total_Audience'] = df['Total_Audience'].apply(lambda x: f"{x:,.0f} 명")
     df['Avg_Audience_Formatted'] = df['Avg_Audience'].apply(lambda x: f"{x:,.0f} 명")
     
@@ -182,17 +201,38 @@ def main():
     
     st.set_page_config(
         page_title="K-Movie Ecosystem Explorer",
-        layout="wide", # 넓은 레이아웃 사용
+        layout="wide",
         initial_sidebar_state="auto"
     )
 
     st.title("🎬 K-Movie Ecosystem Explorer (영화 산업 분석)")
     st.markdown("---")
     
-    # 1. 데이터 로드 (캐싱된 데이터 사용)
-    movie_records = get_full_analysis_data(KOBIS_LIST_KEY, KOBIS_DETAIL_KEY)
+    # --- 새로운 사이드바 필터 설정 ---
+    st.sidebar.header("🔍 데이터 필터 설정")
+    current_year = datetime.now().year
+    
+    start_year_options = list(range(2000, current_year + 1))
+    
+    # 2018년을 기본값으로 설정하여 최근 흥행 영화를 확보하도록 유도
+    default_index = start_year_options.index(2018) if 2018 in start_year_options else len(start_year_options) - 1
+    
+    start_year = st.sidebar.selectbox(
+        "최소 개봉 연도 선택 (개봉일자 From):",
+        options=start_year_options,
+        index=default_index, 
+        key='start_year_select',
+        help="선택한 연도 이후에 개봉한 영화만 분석 대상에 포함됩니다."
+    )
+    st.sidebar.markdown("---")
+    # --- 필터 설정 끝 ---
+
+
+    # 1. 데이터 로드 (필터링된 연도와 키를 인수로 사용)
+    movie_records = get_full_analysis_data(KOBIS_LIST_KEY, KOBIS_DETAIL_KEY, start_year)
     
     if movie_records is None or not movie_records: 
+        st.warning("데이터 수집에 실패했거나, 유효한 영화 기록이 없습니다. API 키 또는 네트워크 연결을 확인해 주세요.")
         st.stop()
         
     st.markdown("---")
@@ -278,7 +318,7 @@ def main():
                 st.dataframe(display_df, use_container_width=True)
                 
             else:
-                st.warning(f"데이터 부족 또는 흥행 기록이 없는 영화만 수집되어 분석할 수 없습니다. 검색 조건을 조정해 보세요.")
+                st.warning(f"데이터 부족 또는 흥행 기록이 없는 영화만 수집되어 분석할 수 없습니다. 최소 개봉 연도를 조정해 보세요. (현재 기준 연도: {start_year}년)")
 
 if __name__ == "__main__":
     main()
