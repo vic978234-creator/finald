@@ -83,8 +83,11 @@ def fetch_movie_details(detail_key, movie_code):
         return None
 
 @st.cache_data(show_spinner="🎬 2단계: 상세 정보 및 관계 데이터 수집 중...")
-def get_full_analysis_data(boxoffice_key, detail_key, target_date, start_year):
-    """1, 2단계 API 호출을 통합하고 데이터 분석을 위한 DataFrame을 생성합니다. (단일 주차만 호출)"""
+def get_full_analysis_data(boxoffice_key, detail_key, target_date):
+    """
+    1, 2단계 API 호출을 통합하고 데이터 분석을 위한 DataFrame을 생성합니다.
+    (최소 개봉 연도 필터링 로직 제거 - 연도 필터링은 이제 사용하지 않음)
+    """
     
     if not boxoffice_key or not detail_key:
         return None 
@@ -114,11 +117,6 @@ def get_full_analysis_data(boxoffice_key, detail_key, target_date, start_year):
         if detail_info:
             open_dt = detail_info.get('openDt', '99991231')
             
-            # Python 코드 내에서 연도 필터링 수행
-            if len(open_dt) >= 4 and int(open_dt[:4]) < start_year:
-                progress_bar.progress((i + 1) / total_movies)
-                continue # 선택된 연도보다 이전 영화는 건너뛰어야 합니다.
-                
             # 누적 관객수(`audiAcc`)는 BoxOffice API에서 가져온 것을 사용합니다.
             audi_cnt = int(box_office_item.get('audiAcc', '0'))
             
@@ -129,8 +127,8 @@ def get_full_analysis_data(boxoffice_key, detail_key, target_date, start_year):
                 'movieNm': box_office_item.get('movieNm'),
                 'audiCnt': audi_cnt,
                 'openDt': open_dt,
-                'watchGrade': watch_grade, # 새로 추가된 등급 정보
-                'targetDate': target_date_dt, # 연령 분석을 위한 기준 날짜
+                'watchGrade': watch_grade, 
+                'targetDate': target_date_dt, 
                 # 장르 정보 추출
                 'genres': [g['genreNm'] for g in detail_info.get('genres', [])],
             }
@@ -273,50 +271,6 @@ def analyze_genre_trends(movie_records):
     
     return df, total_market_audience
 
-def analyze_distributor_market_share(movie_records):
-    """
-    수집된 데이터를 기반으로 배급사별 시장 점유율을 계산합니다. (오직 '배급' 역할만 사용)
-    """
-    distributor_data = defaultdict(lambda: {'total_audience': 0, 'movie_count': 0})
-    total_market_audience = sum(movie['audiCnt'] for movie in movie_records)
-    
-    for movie in movie_records:
-        audience = movie['audiCnt']
-        
-        distributors = movie.get('distributors') 
-        if not distributors:
-            continue
-
-        for distributor_tuple in distributors:
-            distributor_name = distributor_tuple[0]
-            
-            distributor_data[distributor_name]['total_audience'] += audience
-            distributor_data[distributor_name]['movie_count'] += 1
-            
-    results = []
-    for name, data in distributor_data.items():
-        if data['total_audience'] > 0:
-            share = (data['total_audience'] / total_market_audience) * 100 if total_market_audience > 0 else 0
-            
-            results.append({
-                'Distributor_Name': name,
-                'Total_Audience': int(data['total_audience']),
-                'Movie_Count': data['movie_count'],
-                'Audience_Share_Percentage': share
-            })
-
-    if not results:
-        return pd.DataFrame(), 0
-
-    df = pd.DataFrame(results).sort_values(by='Total_Audience', ascending=False).reset_index(drop=True)
-    df.index = df.index + 1
-    df.index.name = 'Rank'
-    
-    df['Total_Audience_Formatted'] = df['Total_Audience'].apply(lambda x: f"{x:,.0f} 명")
-    df['Audience_Share_Formatted'] = df['Audience_Share_Percentage'].apply(lambda x: f"{x:.1f} %")
-    
-    return df, total_market_audience
-
 def analyze_rating_impact(movie_records):
     """
     수집된 데이터를 기반으로 등급별 흥행 효과(평균 관객 수, 점유율)를 계산합니다.
@@ -365,6 +319,7 @@ def analyze_rating_impact(movie_records):
 def analyze_movie_age(movie_records, target_date):
     """
     개봉일과 기준일을 비교하여 영화 연령대별 흥행을 분석합니다.
+    (그룹 이름을 신작, 중기작, 장기작으로 변경)
     """
     age_data = defaultdict(lambda: {'total_audience': 0, 'movie_count': 0})
     total_market_audience = sum(movie['audiCnt'] for movie in movie_records)
@@ -383,12 +338,13 @@ def analyze_movie_age(movie_records, target_date):
             # 개봉일 데이터 형식이 잘못된 경우 스킵
             continue
 
+        # 그룹 이름을 신작, 중기작, 장기작으로 변경
         if days_since_open <= 7:
-            age_group = "1주차 (New Release)"
+            age_group = "신작 (New Release)"
         elif days_since_open <= 28: # 2~4주차
-            age_group = "2~4주차 (Mid-Term)"
+            age_group = "중기작 (Mid-Term)"
         else:
-            age_group = "4주 초과 (Veteran)"
+            age_group = "장기작 (Veteran)"
             
         age_data[age_group]['total_audience'] += audience
         age_data[age_group]['movie_count'] += 1
@@ -446,24 +402,15 @@ def main():
         max_value=today,
         help="선택한 날짜의 주간 박스오피스 상위 100개 영화를 기준으로 데이터를 가져옵니다."
     )
+    # 최소 개봉 연도 선택 (분석 필터)는 제거됨
     target_date_str = target_date_dt.strftime("%Y%m%d")
 
-    # 개봉 연도 필터
-    current_year = datetime.now().year
-    start_year_options = list(range(2000, current_year + 1))
-    default_index = start_year_options.index(2018) if 2018 in start_year_options else len(start_year_options) - 1
-    start_year = st.sidebar.selectbox(
-        "최소 개봉 연도 선택 (분석 필터):", 
-        options=start_year_options,
-        index=default_index, 
-        key='start_year_select',
-        help="이 연도 이후에 개봉된 영화만 분석에 사용됩니다."
-    )
     st.sidebar.markdown("---")
     # --- 필터 설정 끝 ---
 
     # 1. 데이터 로드 (캐싱된 데이터 사용)
-    movie_records = get_full_analysis_data(KOBIS_BOXOFFICE_KEY, KOBIS_DETAIL_KEY, target_date_str, start_year) 
+    # 최소 개봉 연도 필터(start_year)를 사용하지 않으므로 인자에서 제거
+    movie_records = get_full_analysis_data(KOBIS_BOXOFFICE_KEY, KOBIS_DETAIL_KEY, target_date_str) 
     
     if movie_records is None or not movie_records: 
         st.warning("데이터 수집에 실패했거나, 흥행 기록이 있는 영화가 수집되지 않았습니다. 기준 날짜를 변경하거나 API 키를 확인해 주세요.")
@@ -474,14 +421,14 @@ def main():
 
     # -----------------------------------------------
     # 3.1 탭 구조로 분석 유형 분리
+    # (배급사 시장 점유율 탭 제거, 총 4개 탭)
     # -----------------------------------------------
     
-    tab1, tab2, tab3, tab4, tab5 = st.tabs([
+    tab1, tab2, tab3, tab4 = st.tabs([
         "감독/회사 흥행 분석", 
         "장르별 흥행 트렌드", 
-        "배급사 시장 점유율",
         "등급별 흥행 효과",
-        "영화 연령별 흥행"
+        "영화 연령별 흥행 (신작/중기작/장기작)" # 탭 이름 변경
     ])
     
     # Tab 1: 감독/회사 흥행 분석
@@ -537,22 +484,20 @@ def main():
                         hover_data={'Total_Audience': ':.0f', 'Name': True, 'Movie_Count': True}
                     ) 
                     
-                    # 💡 수정 2: 그래프에서 1위가 가장 위에 오도록 y축 순서를 강제로 뒤집음
+                    # 💡 그래프 순서 반전 문제 해결: y축의 카테고리 순서를 총 관객 수 기준으로 오름차순 정렬하여 1위가 가장 위에 오도록 함
                     fig.update_layout(
                         xaxis_title="총 누적 관객 수", 
                         yaxis_title=entity_selection, 
-                        yaxis={'categoryorder': 'total ascending'}, # 관객수 순으로 정렬하고
+                        yaxis={'categoryorder': 'total ascending'}, 
                         height=max(500, top_n * 30)
                     )
-                    st.plotly_chart(fig, use_container_width=True)
-
+                    st.plotly_chart(fig, use_container_width=True) 
                     display_df = top_df.rename(columns={
                         'Name': '이름',
                         'Movie_Count': '총 참여 영화 수',
                         'Total_Audience': '총 관객 수 (명)',
                     })[['이름', '총 참여 영화 수', '총 관객 수 (명)']] 
                     
-                    # 💡 수정 2: 테이블 순서는 이미 내림차순(흥행 순)이므로 그대로 출력합니다.
                     st.dataframe(display_df, use_container_width=True, hide_index=True)
                     
                     st.markdown("---")
@@ -566,7 +511,7 @@ def main():
                 else:
                     st.warning(f"분석 결과가 없습니다. 기준일에 흥행 기록이 있는 영화가 부족하거나, 설정된 개봉 연도 필터와 일치하는 영화가 없습니다.")
 
-    # Tab 2: 장르별 흥행 트렌드
+    # Tab 2: 장르별 흥행 트렌드 (탭 순서 변경됨)
     with tab2:
         st.subheader("📈 장르별 주간 흥행 트렌드 분석")
         st.markdown("선택된 주간 박스오피스 상위 영화를 기준으로 장르별 총 관객 수와 시장 점유율을 분석합니다.")
@@ -584,8 +529,7 @@ def main():
                 color_discrete_sequence=px.colors.qualitative.Pastel
             )
             fig_pie.update_traces(textinfo='percent+label', marker=dict(line=dict(color='#000000', width=1)))
-            st.plotly_chart(fig_pie, use_container_width=True)
-            
+            st.plotly_chart(fig_pie, use_container_width=True)             
             display_genre_df = genre_df.rename(columns={
                 'Genre_Name': '장르',
                 'Movie_Count': '총 참여 영화 수',
@@ -596,41 +540,8 @@ def main():
         else:
             st.warning("분석할 장르 데이터가 없습니다. (KOBIS API에서 장르 정보가 누락되었거나, 흥행 영화가 없습니다.)")
 
-    # Tab 3: 배급사 시장 점유율
+    # Tab 3: 등급별 흥행 효과 분석 (탭 순서 변경됨)
     with tab3:
-        st.subheader("📊 배급사 주간 시장 점유율 분석")
-        st.markdown("선택된 주간 박스오피스 상위 영화를 기준으로 **순수 배급사**별 총 관객 수와 시장 점유율을 분석합니다.")
-        
-        distributor_df, total_audience = analyze_distributor_market_share(movie_records)
-        
-        if not distributor_df.empty:
-            st.markdown(f"**총 분석 관객 수:** {total_audience:,.0f} 명")
-            
-            fig_bar = px.bar(
-                distributor_df,
-                x='Total_Audience',
-                y='Distributor_Name',
-                orientation='h',
-                title='배급사별 총 관객 수 및 시장 점유율',
-                color='Audience_Share_Percentage',
-                color_continuous_scale=px.colors.sequential.Plotly3,
-                hover_data={'Total_Audience': ':.0f', 'Movie_Count': True, 'Audience_Share_Percentage': ':.1f'}
-            )
-            fig_bar.update_layout(xaxis_title="총 누적 관객 수", yaxis_title="배급사", height=max(500, len(distributor_df) * 30))
-            st.plotly_chart(fig_bar, use_container_width=True)
-            
-            display_distributor_df = distributor_df.rename(columns={
-                'Distributor_Name': '배급사',
-                'Movie_Count': '총 배급 영화 수',
-                'Total_Audience_Formatted': '총 관객 수 (명)',
-                'Audience_Share_Formatted': '관객 점유율',
-            })[['배급사', '총 배급 영화 수', '총 관객 수 (명)', '관객 점유율']]
-            st.dataframe(display_distributor_df, use_container_width=True, hide_index=False)
-        else:
-            st.warning("분석할 배급사 데이터가 없습니다. (KOBIS API에서 배급사 정보가 누락되었거나, 흥행 영화가 없습니다.)")
-            
-    # Tab 4: 등급별 흥행 효과 분석 (신규)
-    with tab4:
         st.subheader("🔞 등급별 평균 흥행력 및 시장 기여도 분석")
         st.markdown("선택된 주간 박스오피스 상위 영화를 기준으로 관람 등급별 평균 관객 수를 분석합니다. (등급별 흥행 잠재력 평가)")
         
@@ -639,7 +550,6 @@ def main():
         if not rating_df.empty:
             st.markdown(f"**총 분석 관객 수:** {total_audience:,.0f} 명")
             
-            # 평균 관객수 기준 막대 차트
             fig_bar = px.bar(
                 rating_df,
                 x='Avg_Audience',
@@ -651,9 +561,7 @@ def main():
                 hover_data={'Avg_Audience': ':.0f', 'Movie_Count': True, 'Audience_Share_Percentage': ':.1f'}
             )
             fig_bar.update_layout(xaxis_title="평균 관객 수", yaxis_title="관람 등급", height=400)
-            st.plotly_chart(fig_bar, use_container_width=True)
-            
-            # 데이터 테이블
+            st.plotly_chart(fig_bar, use_container_width=True)             
             display_rating_df = rating_df.rename(columns={
                 'Rating_Name': '관람 등급',
                 'Movie_Count': '총 참여 영화 수',
@@ -665,12 +573,11 @@ def main():
         else:
             st.warning("분석할 등급 데이터가 없습니다. (KOBIS API에서 등급 정보가 누락되었거나, 흥행 영화가 없습니다.)")
 
-    # Tab 5: 영화 연령별 흥행 분석 (신규)
-    with tab5:
-        st.subheader("📅 영화 연령별 시장 역동성 분석")
+    # Tab 4: 영화 연령별 흥행 분석 (탭 순서 변경 및 이름 변경됨)
+    with tab4:
+        st.subheader("📅 영화 연령별 시장 역동성 분석 (신작, 중기작, 장기작)")
         st.markdown("개봉일과 기준일을 비교하여 신작, 중기작, 장기 흥행작의 관객 점유율을 분석합니다. (시장 역동성 파악)")
         
-        # 💡 수정 1: target_date_dt는 이미 date 객체이므로 .date() 호출을 제거합니다.
         movie_age_df, total_audience = analyze_movie_age(movie_records, target_date_dt)
         
         if not movie_age_df.empty:
@@ -685,8 +592,7 @@ def main():
                 color_discrete_sequence=px.colors.qualitative.Bold
             )
             fig_pie.update_traces(textinfo='percent+label', marker=dict(line=dict(color='#000000', width=1)))
-            st.plotly_chart(fig_pie, use_container_width=True)
-            
+            st.plotly_chart(fig_pie, use_container_width=True)             
             # 데이터 테이블
             display_age_df = movie_age_df.rename(columns={
                 'Age_Group': '영화 연령 그룹',
