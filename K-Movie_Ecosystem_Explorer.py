@@ -226,6 +226,9 @@ def analyze_hitmaker_index(movie_records, entity_type='Director'):
     df.index = df.index + 1
     df.index.name = 'Rank'
     
+    # 💡 수정 1: Y축에 사용할 순위+이름 조합 컬럼 생성
+    df['Rank_Name'] = df.index.map(str) + ". " + df['Name']
+
     df['Total_Audience'] = df['Total_Audience'].apply(lambda x: f"{x:,.0f} 명")
     
     return df
@@ -474,22 +477,22 @@ def main():
                     
                     st.subheader(f"🏆 Top {top_n} {entity_selection} 흥행 분석 (총 관객 수)")
                     
-                    # 💡 그래프 순서 최종 수정
+                    # 💡 그래프 순서 최종 수정 (Rank_Name 컬럼 사용)
                     # Plotly bar chart
                     fig = px.bar(
                         top_df,
                         x='Total_Audience', 
-                        y='Name',
+                        y='Rank_Name', # 순위+이름 조합 컬럼 사용
                         orientation='h',
                         title=f"Top {top_n} {entity_selection} Total Audience Count (기준일: {target_date_str})",
                         color='Total_Audience',
                         color_continuous_scale=px.colors.sequential.Teal,
-                        hover_data={'Total_Audience': ':.0f', 'Name': True, 'Movie_Count': True}
+                        hover_data={'Total_Audience': ':.0f', 'Movie_Count': True}
                     ) 
                     
-                    # 'Name' (Y축) 순서를 데이터프레임 순서(Total_Audience 내림차순)와 일치시키고,
-                    # Y축을 강제로 뒤집어(reversed) 1위 항목이 가장 위에 오도록 합니다.
-                    top_df_names_in_order = top_df['Name'].tolist()
+                    # Y축 순서를 데이터프레임의 순서(1위부터 30위까지)와 일치시키고,
+                    # Y축을 강제로 뒤집어(reversed) 1위 항목이 그래프의 가장 위에 오도록 합니다.
+                    top_df_names_in_order = top_df['Rank_Name'].tolist()
                     
                     fig.update_layout(
                         xaxis_title="총 누적 관객 수", 
@@ -497,7 +500,7 @@ def main():
                         yaxis={
                             'categoryorder': 'array',
                             'categoryarray': top_df_names_in_order, # 데이터프레임의 순서 그대로 사용
-                            'autorange': 'reversed' # 순위를 뒤집어 1위가 가장 위에 오도록 함
+                            'autorange': 'reversed' # 1위가 가장 위에 오도록 순위 뒤집기
                         }, 
                         height=max(500, top_n * 30)
                     )
