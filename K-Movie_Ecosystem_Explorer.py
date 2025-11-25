@@ -217,6 +217,7 @@ def analyze_hitmaker_index(movie_records, entity_type='Director'):
         return pd.DataFrame() 
 
     try:
+        # Sort_Index (총 관객 수) 기준으로 내림차순 정렬
         df = pd.DataFrame(results).sort_values(by='Sort_Index', ascending=False).reset_index(drop=True)
     except KeyError:
         st.error("데이터프레임 구조 오류: 분석 키('Sort_Index')를 찾을 수 없습니다.")
@@ -473,6 +474,8 @@ def main():
                     
                     st.subheader(f"🏆 Top {top_n} {entity_selection} 흥행 분석 (총 관객 수)")
                     
+                    # 💡 그래프 순서 최종 수정
+                    # Plotly bar chart
                     fig = px.bar(
                         top_df,
                         x='Total_Audience', 
@@ -484,14 +487,22 @@ def main():
                         hover_data={'Total_Audience': ':.0f', 'Name': True, 'Movie_Count': True}
                     ) 
                     
-                    # 💡 그래프 순서 반전 문제 해결: y축의 카테고리 순서를 총 관객 수 기준으로 오름차순 정렬하여 1위가 가장 위에 오도록 함
+                    # 'Name' (Y축) 순서를 데이터프레임 순서(Total_Audience 내림차순)와 일치시키고,
+                    # Y축을 강제로 뒤집어(reversed) 1위 항목이 가장 위에 오도록 합니다.
+                    top_df_names_in_order = top_df['Name'].tolist()
+                    
                     fig.update_layout(
                         xaxis_title="총 누적 관객 수", 
                         yaxis_title=entity_selection, 
-                        yaxis={'categoryorder': 'total ascending'}, 
+                        yaxis={
+                            'categoryorder': 'array',
+                            'categoryarray': top_df_names_in_order, # 데이터프레임의 순서 그대로 사용
+                            'autorange': 'reversed' # 순위를 뒤집어 1위가 가장 위에 오도록 함
+                        }, 
                         height=max(500, top_n * 30)
                     )
                     st.plotly_chart(fig, use_container_width=True) 
+
                     display_df = top_df.rename(columns={
                         'Name': '이름',
                         'Movie_Count': '총 참여 영화 수',
@@ -560,7 +571,13 @@ def main():
                 color_continuous_scale=px.colors.sequential.Sunset,
                 hover_data={'Avg_Audience': ':.0f', 'Movie_Count': True, 'Audience_Share_Percentage': ':.1f'}
             )
-            fig_bar.update_layout(xaxis_title="평균 관객 수", yaxis_title="관람 등급", height=400)
+            # Y축 순서를 평균 관객 수 기준으로 정렬 (내림차순)
+            fig_bar.update_layout(
+                xaxis_title="평균 관객 수", 
+                yaxis_title="관람 등급", 
+                yaxis={'categoryorder': 'total ascending'}, # 평균 관객 수 기준으로 정렬하여 1위가 위에 오도록 함
+                height=400
+            )
             st.plotly_chart(fig_bar, use_container_width=True)             
             display_rating_df = rating_df.rename(columns={
                 'Rating_Name': '관람 등급',
