@@ -4,69 +4,63 @@ import requests
 from collections import defaultdict
 import plotly.express as px
 from operator import itemgetter
-from datetime import datetime
+from datetime import datetime, timedelta
 
 # ===============================================
 # 1. 환경 설정 및 데이터 정의 (KOBIS API 사용)
 # ===============================================
 
 # --- API KEY ---
-# KOBIS API에서 발급받은 두 가지 키를 여기에 직접 입력합니다.
+# 고객님께서 제공해주신 새로운 API 키(f6ae9fdbd8ba038eda177250d3e57b4c)로 두 개의 키를 모두 업데이트합니다.
 # -----------------------------------------------------------
-# 1. 영화 목록 (LIST) API 키: searchMovieList 호출에 사용 (사용자 키 적용 완료)
-KOBIS_LIST_KEY = "cc5c76f4946f878b829af9b116062ad4" 
+# 1. 주간/주말 박스오피스 키 (흥행 영화 목록 가져오기)
+KOBIS_BOXOFFICE_KEY = "f6ae9fdbd8ba038eda177250d3e57b4c" 
 
-# 2. 영화 상세 정보 (DETAIL) API 키: searchMovieInfo 호출에 사용 (사용자 키 적용)
-KOBIS_DETAIL_KEY = "6350d8964d4c5160f40135185663cb48" 
+# 2. 영화 상세 정보 (DETAIL) 키: 감독/회사 정보 가져오기
+KOBIS_DETAIL_KEY = "f6ae9fdbd8ba038eda177250d3e57b4c" 
 # -----------------------------------------------------------
 
 
 # --- API URLS ---
-LIST_URL = "http://www.kobis.or.kr/kobisopenapi/webservice/rest/movie/searchMovieList.json"
+# 1. 주간/주말 박스오피스 API로 변경 (흥행 영화 목록 확보 목적)
+BOXOFFICE_URL = "http://www.kobis.or.kr/kobisopenapi/webservice/rest/boxoffice/searchWeeklyBoxOfficeList.json"
+# 2. 영화 상세 정보 API는 그대로 유지
 DETAIL_URL = "http://www.kobis.or.kr/kobisopenapi/webservice/rest/movie/searchMovieInfo.json"
 
 # ===============================================
 # 2. 데이터 처리 및 분석 로직
 # ===============================================
 
-@st.cache_data(show_spinner="🎬 1단계: 초기 영화 목록을 불러오는 중...")
-def fetch_movie_list(list_key, start_year):
+# @st.cache_data를 사용하여 API 호출 결과를 캐시하여 재실행 시 속도를 높입니다.
+@st.cache_data(show_spinner="🎬 1단계: 주간 박스오피스 목록을 불러오는 중...")
+def fetch_boxoffice_list(api_key, target_date):
     """
-    KOBIS 영화 목록 API를 호출하여 영화 코드 리스트를 가져옵니다.
-    :param start_year: 최소 개봉 연도 (YYYY)
+    KOBIS 주간 박스오피스 API를 호출하여 흥행 영화 목록을 가져옵니다.
+    :param target_date: 주간 박스오피스 기준일 (YYYYMMDD 형식)
     """
-    # 🚨 키 유효성 검사 강화
-    if not list_key or len(list_key) != 32: 
-        st.error("🚨 KOBIS LIST API 키가 유효하지 않습니다. 32자리 키를 확인해 주세요.")
+    if not api_key or len(api_key) != 32: 
+        st.error("🚨 KOBIS BOXOFFICE API 키가 유효하지 않습니다. 32자리 키를 확인해 주세요.")
         return None
         
-    # itemPerPage를 100으로 사용하고 openStartDt를 YYYY 형식으로만 전송합니다. (이전 오류 해결 시도)
     params = {
-        'key': list_key, 
-        'itemPerPage': 100,
-        # YYYYMMDD 대신 YYYY 형식만 전송하도록 수정
-        'openStartDt': f"{start_year}" 
+        'key': api_key, 
+        'targetDt': target_date,
+        'weekGb': '0', # '0': 주간(월~일)
     }
     
     try:
-        response = requests.get(LIST_URL, params=params, timeout=10)
+        response = requests.get(BOXOFFICE_URL, params=params, timeout=10)
         response.raise_for_status() 
         data = response.json()
         
-        # API 오류 메시지 확인 (키 오류 등)
         if 'faultInfo' in data:
             error_msg = data['faultInfo'].get('message', '알 수 없는 오류')
-            
-            if '발급받지 않은 인증키' in error_msg or '유효하지 않은' in error_msg or '검색년도는' in error_msg:
-                # API 오류 메시지가 연도 문제이더라도, 키 인증 문제일 가능성이 높음을 사용자에게 알립니다.
-                st.error(f"❌ 1단계 API 호출 오류: KOBIS LIST 키의 권한 문제 또는 인증 실패가 의심됩니다. 키와 서비스 권한을 다시 확인해 주세요. (원인: {error_msg})")
-            else:
-                st.error(f"❌ 1단계 API 호출 오류: {error_msg}")
+            st.error(f"❌ 1단계 API 호출 오류: 키 인증 실패 또는 권한 오류가 의심됩니다. (원인: {error_msg})")
             return None
             
-        movie_list = data.get('movieListResult', {}).get('movieList', [])
-        st.success(f"1단계 완료: 총 {len(movie_list)}개의 영화 코드를 가져왔습니다. (개봉일: {start_year}년 이후)")
-        return movie_list
+        boxoffice_list = data.get('boxOfficeResult', {}).get('weeklyBoxOfficeList', [])
+        st.success(f"1단계 완료: 총 {len(boxoffice_list)}개의 흥행 영화 코드를 가져왔습니다. (기준일: {target_date})")
+        return boxoffice_list
     except requests.exceptions.RequestException as e:
         st.error(f"❌ 1단계 API 요청 중 네트워크/연결 오류 발생: {e}")
         return None
@@ -89,63 +83,67 @@ def fetch_movie_details(detail_key, movie_code):
     except requests.exceptions.RequestException:
         return None
 
-def get_full_analysis_data(list_key, detail_key, start_year):
+# start_year 매개변수는 이제 UI에서만 사용하며 API 호출에 직접 사용되지 않습니다.
+def get_full_analysis_data(boxoffice_key, detail_key, target_date, start_year):
     """1, 2단계 API 호출을 통합하고 데이터 분석을 위한 DataFrame을 생성합니다."""
     
-    if not list_key or not detail_key:
+    if not boxoffice_key or not detail_key:
         return None 
         
-    # start_year 인수를 fetch_movie_list에 전달
-    movie_list_data = fetch_movie_list(list_key, start_year)
+    # 1단계: 흥행 영화 목록 가져오기 (BOXOFFICE_KEY 사용)
+    boxoffice_list = fetch_boxoffice_list(boxoffice_key, target_date)
     
-    if movie_list_data is None:
+    if boxoffice_list is None:
         return None 
 
     st.markdown("---")
     st.subheader("🎬 2단계: 상세 정보 및 관계 데이터 수집 중...")
-    progress_bar = st.progress(0, text="각 영화의 관객수, 감독, 회사 정보를 수집 중입니다...")
+    progress_bar = st.progress(0, text="각 영화의 감독, 회사 정보를 수집 중입니다...")
     
     movie_records = []
-    total_movies = len(movie_list_data)
+    total_movies = len(boxoffice_list)
     
-    for i, movie in enumerate(movie_list_data):
-        movie_code = movie['movieCd']
+    # 목표 연도 설정
+    target_year = str(start_year)
+    
+    for i, box_office_item in enumerate(boxoffice_list):
+        movie_code = box_office_item['movieCd']
         
+        # 2단계: 상세 정보 호출 (DETAIL_KEY 사용)
         detail_info = fetch_movie_details(detail_key, movie_code)
         
         if detail_info:
-            audi_cnt = 0
-            audi_cnt_str = detail_info.get('audiCnt', '0')
-            try:
-                if audi_cnt_str:
-                    # 콤마 제거 후 정수로 변환 시도
-                    audi_cnt = int(audi_cnt_str.replace(',', ''))
-            except ValueError:
-                audi_cnt = 0 # 변환 실패 시 0으로 처리
+            open_dt = detail_info.get('openDt', '99991231')
+            
+            # Python 코드 내에서 연도 필터링 수행
+            if len(open_dt) >= 4 and int(open_dt[:4]) < start_year:
+                progress_bar.progress((i + 1) / total_movies)
+                continue # 선택된 연도보다 이전 영화는 건너뜀
+                
+            # 누적 관객수(`audiAcc`)는 BoxOffice API에서 가져온 것을 사용합니다.
+            audi_cnt = int(box_office_item.get('audiAcc', '0'))
 
             record = {
-                'movieNm': detail_info.get('movieNm', movie['movieNm']),
+                'movieNm': box_office_item.get('movieNm'),
                 'audiCnt': audi_cnt,
-                'openDt': detail_info.get('openDt', '정보 없음'),
+                'openDt': open_dt,
             }
             
-            # 감독 정보 추출 (KeyError 방지를 위해 .get 사용)
-            directors = [(d['peopleNm'], detail_info['movieNm'], audi_cnt) for d in detail_info.get('directors', [])]
+            # 감독 정보 추출
+            directors = [(d['peopleNm'], record['movieNm'], audi_cnt) for d in detail_info.get('directors', [])]
             record['directors'] = directors
             
             # 회사(제작사/배급사) 정보 추출
             companies = []
             for company in detail_info.get('companys', []):
-                # 제작사와 배급사만 포함
                 role = company.get('companyPartNm', '')
                 if '제작' in role or '배급' in role:
-                    companies.append((company.get('companyNm', '미상'), detail_info['movieNm'], audi_cnt, role))
+                    companies.append((company.get('companyNm', '미상'), record['movieNm'], audi_cnt, role))
             record['companies'] = companies
             
             movie_records.append(record)
 
-        progress_percentage = (i + 1) / total_movies
-        progress_bar.progress(progress_percentage)
+        progress_bar.progress((i + 1) / total_movies)
         
     progress_bar.empty()
     st.success("2단계 완료: 모든 영화의 상세 정보 및 관계 데이터 수집 완료.")
@@ -155,6 +153,7 @@ def get_full_analysis_data(list_key, detail_key, start_year):
 def analyze_hitmaker_index(movie_records, entity_type='Director'):
     """
     수집된 데이터를 기반으로 감독 또는 회사의 평균 흥행 지수를 계산하고 DataFrame을 생성합니다.
+    (이 함수는 이전과 동일하며, 안정성이 검증됨)
     """
     entity_data = defaultdict(lambda: {'total_audience': 0, 'movie_count': 0})
     
@@ -215,35 +214,53 @@ def main():
         initial_sidebar_state="auto"
     )
 
-    st.title("🎬 K-Movie Ecosystem Explorer (영화 산업 분석)")
+    st.title("🎬 K-Movie Ecosystem Explorer (영화 산업 분석 - 박스오피스 기반)")
     st.markdown("---")
     
-    # --- 새로운 사이드바 필터 설정 ---
+    # --- 사이드바 필터 설정 ---
     st.sidebar.header("🔍 데이터 필터 설정")
+    
+    # 주간 박스오피스는 기준일이 필요합니다.
+    # 현재 날짜로부터 7일 전(지난 주)의 일요일 날짜를 기본값으로 사용
+    today = datetime.today()
+    # KOBIS는 일요일 기준 주간 박스오피스를 제공합니다. targetDt는 해당 주의 '일요일' 날짜여야 합니다.
+    # 오늘이 일요일(6)이라면 오늘, 아니면 지난 주 일요일을 계산합니다.
+    days_to_subtract = today.weekday() + 1
+    if days_to_subtract > 6: days_to_subtract = 7 # 일요일은 0이 아닌 6을 반환하므로 조정
+    
+    default_date = today - timedelta(days=days_to_subtract)
+    
+    # 사용자에게 기준 날짜를 입력받습니다.
+    target_date_dt = st.sidebar.date_input(
+        "주간 박스오피스 기준일 (일요일):",
+        value=default_date,
+        max_value=today,
+        help="선택한 날짜의 주간 박스오피스를 기준으로 영화 목록을 가져옵니다."
+    )
+    # KOBIS API 형식인 YYYYMMDD 문자열로 변환
+    target_date_str = target_date_dt.strftime("%Y%m%d")
+
+    # 개봉 연도 필터 (분석 데이터 필터링용)
     current_year = datetime.now().year
-    
     start_year_options = list(range(2000, current_year + 1))
-    
-    # 2018년을 기본값으로 설정하여 최근 흥행 영화를 확보하도록 유도
     default_index = start_year_options.index(2018) if 2018 in start_year_options else len(start_year_options) - 1
     
-    # 문구를 '최소 개봉 연도'로 되돌립니다. API에서 'openStartDt'를 사용하기 때문입니다.
     start_year = st.sidebar.selectbox(
-        "최소 개봉 연도 선택 (개봉일자 From):", 
+        "최소 개봉 연도 선택 (분석 필터):", 
         options=start_year_options,
         index=default_index, 
         key='start_year_select',
-        help="선택한 연도 이후에 개봉된 영화만 분석 대상에 포함됩니다. (이 값이 낮을수록 분석에 시간이 오래 걸릴 수 있습니다.)"
+        help="이 연도 이후에 개봉된 영화만 분석에 사용됩니다."
     )
     st.sidebar.markdown("---")
     # --- 필터 설정 끝 ---
 
 
-    # 1. 데이터 로드 (필터링된 연도와 키를 인수로 사용)
-    movie_records = get_full_analysis_data(KOBIS_LIST_KEY, KOBIS_DETAIL_KEY, start_year)
+    # 1. 데이터 로드 (변경된 API 키와 인수를 사용)
+    movie_records = get_full_analysis_data(KOBIS_BOXOFFICE_KEY, KOBIS_DETAIL_KEY, target_date_str, start_year) 
     
     if movie_records is None or not movie_records: 
-        st.warning("데이터 수집에 실패했거나, 유효한 영화 기록이 없습니다. API 키 또는 네트워크 연결을 확인해 주세요.")
+        st.warning("데이터 수집에 실패했거나, 흥행 기록이 있는 영화가 수집되지 않았습니다. 기준 날짜를 변경하거나 API 키를 확인해 주세요.")
         st.stop()
         
     st.markdown("---")
@@ -301,7 +318,7 @@ def main():
                     x='Avg_Audience',
                     y='Name',
                     orientation='h',
-                    title=f"Top {top_n} {entity_selection} Average Audience Count",
+                    title=f"Top {top_n} {entity_selection} Average Audience Count (기준일: {target_date_str})",
                     color='Avg_Audience',
                     color_continuous_scale=px.colors.sequential.Teal,
                     hover_data={
@@ -329,7 +346,7 @@ def main():
                 st.dataframe(display_df, use_container_width=True)
                 
             else:
-                st.warning(f"데이터 부족 또는 흥행 기록이 없는 영화만 수집되어 분석할 수 없습니다. 최소 개봉 연도를 조정해 보세요. (현재 기준 연도: {start_year}년)")
+                st.warning(f"분석 결과가 없습니다. 기준일에 흥행 기록이 있는 영화가 부족하거나, 설정된 개봉 연도 필터({start_year}년)와 일치하는 영화가 없습니다.")
 
 if __name__ == "__main__":
     main()
