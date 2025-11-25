@@ -536,7 +536,14 @@ def main():
                         color_continuous_scale=px.colors.sequential.Teal,
                         hover_data={'Total_Audience': ':.0f', 'Name': True, 'Movie_Count': True}
                     ) 
-                    fig.update_layout(xaxis_title="총 누적 관객 수", yaxis_title=entity_selection, height=max(500, top_n * 30))
+                    
+                    # 💡 수정 2: 그래프에서 1위가 가장 위에 오도록 y축 순서를 강제로 뒤집음
+                    fig.update_layout(
+                        xaxis_title="총 누적 관객 수", 
+                        yaxis_title=entity_selection, 
+                        yaxis={'categoryorder': 'total ascending'}, # 관객수 순으로 정렬하고
+                        height=max(500, top_n * 30)
+                    )
                     st.plotly_chart(fig, use_container_width=True)
 
                     display_df = top_df.rename(columns={
@@ -544,6 +551,8 @@ def main():
                         'Movie_Count': '총 참여 영화 수',
                         'Total_Audience': '총 관객 수 (명)',
                     })[['이름', '총 참여 영화 수', '총 관객 수 (명)']] 
+                    
+                    # 💡 수정 2: 테이블 순서는 이미 내림차순(흥행 순)이므로 그대로 출력합니다.
                     st.dataframe(display_df, use_container_width=True, hide_index=True)
                     
                     st.markdown("---")
@@ -661,7 +670,8 @@ def main():
         st.subheader("📅 영화 연령별 시장 역동성 분석")
         st.markdown("개봉일과 기준일을 비교하여 신작, 중기작, 장기 흥행작의 관객 점유율을 분석합니다. (시장 역동성 파악)")
         
-        movie_age_df, total_audience = analyze_movie_age(movie_records, target_date_dt.date())
+        # 💡 수정 1: target_date_dt는 이미 date 객체이므로 .date() 호출을 제거합니다.
+        movie_age_df, total_audience = analyze_movie_age(movie_records, target_date_dt)
         
         if not movie_age_df.empty:
             st.markdown(f"**총 분석 관객 수:** {total_audience:,.0f} 명")
