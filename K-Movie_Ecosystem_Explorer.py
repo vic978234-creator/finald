@@ -156,6 +156,12 @@ def analyze_hitmaker_index(movie_records, entity_type='Director'):
                 'Avg_Audience': int(avg_audience),
             })
 
+    # --- [수정된 부분] results 리스트가 비어있는지 확인 ---
+    if not results:
+        # 이 경우, 흥행 기록이 있는 영화를 찾지 못했음을 의미합니다.
+        return pd.DataFrame() 
+    # --- [수정된 부분 끝] ---
+
     # Avg_Audience를 기준으로 내림차순 정렬
     df = pd.DataFrame(results).sort_values(by='Avg_Audience', ascending=False).reset_index(drop=True)
     df.index = df.index + 1
@@ -272,7 +278,7 @@ def main():
                 st.dataframe(display_df, use_container_width=True)
                 
             else:
-                st.warning(f"데이터가 부족하거나 유효한 흥행 기록을 가진 {entity_selection}을 찾을 수 없습니다.")
+                st.warning(f"데이터 부족 또는 흥행 기록이 없는 영화만 수집되어 분석할 수 없습니다. 검색 조건을 조정해 보세요.")
 
 if __name__ == "__main__":
     main()
