@@ -35,27 +35,46 @@ def fetch_movie_list(list_key, start_year):
     KOBIS 영화 목록 API를 호출하여 영화 코드 리스트를 가져옵니다.
     :param start_year: 최소 개봉 연도 (YYYY)
     """
+    # 🚨 키 유효성 검사 강화
     if not list_key or len(list_key) != 32: 
         st.error("🚨 KOBIS LIST API 키가 유효하지 않습니다. 32자리 키를 확인해 주세요.")
         return None
         
     params = {
         'key': list_key, 
-        'itemPerPage': 1000, # <--- 100개에서 1000개로 수정
-        'openStartDt': f"{start_year}0101" # 개봉일자 필터 적용
+        'itemPerPage': 1000, 
+        'openStartDt': f"{start_year}" # YYYYMMDD 대신 YYYY 형식으로만 연도를 보냄 (최소한의 변경으로 테스트)
     }
     
+    # KOBIS API 문서에 따르면 openStartDt는 YYYYMMDD 형식이 맞습니다.
+    # 하지만 오류 메시지가 YYYY를 요구하므로, 연도만 보내거나 아니면 필터를 완전히 제거해야 합니다.
+    # 여기서는 'openStartDt' 대신 'prdtStartYear'를 사용하여 연도 필터링을 시도합니다.
+    
+    params_adjusted = {
+        'key': list_key, 
+        'itemPerPage': 1000,
+        # openStartDt 대신 prdtStartYear를 사용하여 연도 필터링
+        'prdtStartYear': f"{start_year}"
+    }
+
     try:
-        response = requests.get(LIST_URL, params=params, timeout=10)
+        response = requests.get(LIST_URL, params=params_adjusted, timeout=10)
         response.raise_for_status() 
         data = response.json()
         
+        # API 오류 메시지 확인 (키 오류 등)
         if 'faultInfo' in data:
-            st.error(f"❌ 1단계 API 호출 오류: {data['faultInfo'].get('message', '알 수 없는 오류')}")
+            error_msg = data['faultInfo'].get('message', '알 수 없는 오류')
+            
+            # 키 인증 오류로 간주하고 명확한 메시지 출력
+            if '발급받지 않은 인증키' in error_msg or '유효하지 않은' in error_msg or '검색년도는' in error_msg:
+                st.error(f"❌ 1단계 API 호출 오류: 키 인증 실패 또는 권한 오류가 의심됩니다. KOBIS LIST 키와 서비스 권한을 다시 확인해 주세요. (원인: {error_msg})")
+            else:
+                st.error(f"❌ 1단계 API 호출 오류: {error_msg}")
             return None
             
         movie_list = data.get('movieListResult', {}).get('movieList', [])
-        st.success(f"1단계 완료: 총 {len(movie_list)}개의 영화 코드를 가져왔습니다. (개봉일: {start_year}년 이후)")
+        st.success(f"1단계 완료: 총 {len(movie_list)}개의 영화 코드를 가져왔습니다. (제작 연도: {start_year}년 이후)")
         return movie_list
     except requests.exceptions.RequestException as e:
         st.error(f"❌ 1단계 API 요청 중 네트워크/연결 오류 발생: {e}")
@@ -218,11 +237,11 @@ def main():
     default_index = start_year_options.index(2018) if 2018 in start_year_options else len(start_year_options) - 1
     
     start_year = st.sidebar.selectbox(
-        "최소 개봉 연도 선택 (개봉일자 From):",
+        "최소 개봉 연도 선택 (제작일자 From):", # 문구를 개봉 연도에서 제작 연도로 변경
         options=start_year_options,
         index=default_index, 
         key='start_year_select',
-        help="선택한 연도 이후에 개봉한 영화만 분석 대상에 포함됩니다."
+        help="선택한 연도 이후에 제작된 영화만 분석 대상에 포함됩니다."
     )
     st.sidebar.markdown("---")
     # --- 필터 설정 끝 ---
