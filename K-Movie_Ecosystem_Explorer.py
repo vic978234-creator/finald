@@ -11,7 +11,7 @@ from datetime import datetime, timedelta
 # ===============================================
 
 # --- API KEY ---
-# 고객님께서 제공해주신 새로운 API 키(f6ae9fdbd8ba038eda177250d3e57b4c)로 두 개의 키를 모두 업데이트합니다.
+# KOBIS API에서 발급받은 두 가지 키를 여기에 직접 입력합니다.
 # -----------------------------------------------------------
 # 1. 주간/주말 박스오피스 키 (흥행 영화 목록 가져오기)
 KOBIS_BOXOFFICE_KEY = "f6ae9fdbd8ba038eda177250d3e57b4c" 
@@ -31,7 +31,6 @@ DETAIL_URL = "http://www.kobis.or.kr/kobisopenapi/webservice/rest/movie/searchMo
 # 2. 데이터 처리 및 분석 로직
 # ===============================================
 
-# @st.cache_data를 사용하여 API 호출 결과를 캐시하여 재실행 시 속도를 높입니다.
 @st.cache_data(show_spinner="🎬 1단계: 주간 박스오피스 목록을 불러오는 중...")
 def fetch_boxoffice_list(api_key, target_date):
     """
@@ -130,7 +129,7 @@ def get_full_analysis_data(boxoffice_key, detail_key, target_date, start_year):
             }
             
             # 감독 정보 추출
-            directors = [(d['peopleNm'], record['movieNm'], audi_cnt) for d in detail_info.get('directors', [])]
+            directors = [(d['peopleNm'], record['movieNm'], audi_cnt, record['openDt']) for d in detail_info.get('directors', [])]
             record['directors'] = directors
             
             # 회사(제작사/배급사) 정보 추출
@@ -138,7 +137,7 @@ def get_full_analysis_data(boxoffice_key, detail_key, target_date, start_year):
             for company in detail_info.get('companys', []):
                 role = company.get('companyPartNm', '')
                 if '제작' in role or '배급' in role:
-                    companies.append((company.get('companyNm', '미상'), record['movieNm'], audi_cnt, role))
+                    companies.append((company.get('companyNm', '미상'), record['movieNm'], audi_cnt, role, record['openDt']))
             record['companies'] = companies
             
             movie_records.append(record)
@@ -153,9 +152,9 @@ def get_full_analysis_data(boxoffice_key, detail_key, target_date, start_year):
 def analyze_hitmaker_index(movie_records, entity_type='Director'):
     """
     수집된 데이터를 기반으로 감독 또는 회사의 평균 흥행 지수를 계산하고 DataFrame을 생성합니다.
-    (이 함수는 이전과 동일하며, 안정성이 검증됨)
     """
-    entity_data = defaultdict(lambda: {'total_audience': 0, 'movie_count': 0})
+    # movie_list 항목을 추가하여 참여 영화 목록을 저장합니다.
+    entity_data = defaultdict(lambda: {'total_audience': 0, 'movie_count': 0, 'movie_list': []})
     
     for movie in movie_records:
         entities = movie.get('directors') if entity_type == 'Director' else movie.get('companies')
@@ -165,21 +164,36 @@ def analyze_hitmaker_index(movie_records, entity_type='Director'):
         for entity_tuple in entities:
             entity_name = entity_tuple[0]
             audience = entity_tuple[2]
+            movie_name = entity_tuple[1]
+            # 감독: [..., openDt], 회사: [..., role, openDt]
+            open_dt = entity_tuple[3] if entity_type == 'Director' else entity_tuple[4]
             
             if audience > 0:
                 entity_data[entity_name]['total_audience'] += audience
                 entity_data[entity_name]['movie_count'] += 1
                 
+                # 참여 영화 목록 추가 (이름과 개봉일)
+                entity_data[entity_name]['movie_list'].append({
+                    'name': movie_name,
+                    'open_dt': open_dt
+                })
+                
     results = []
     for name, data in entity_data.items():
         if data['movie_count'] > 0:
             avg_audience = data['total_audience'] / data['movie_count']
+            
+            # 영화 목록을 개봉일 순서로 정렬하여 저장
+            sorted_movies = sorted(data['movie_list'], key=lambda x: x['open_dt'], reverse=True)
+            movie_display_list = [f"{m['name']} ({m['open_dt'][:4]})" for m in sorted_movies]
+            
             results.append({
                 'Name': name,
                 'Type': entity_type,
                 'Movie_Count': data['movie_count'],
                 'Total_Audience': data['total_audience'],
                 'Avg_Audience': int(avg_audience),
+                'Movie_List': movie_display_list # 참여 영화 리스트 추가
             })
 
     # KeyError: 'Avg_Audience' 방지: results가 비어있으면 빈 DataFrame 반환
@@ -344,6 +358,21 @@ def main():
                 })[['이름', '참여 영화 수', '평균 관객 수', '총 관객 수']]
                 
                 st.dataframe(display_df, use_container_width=True)
+                
+                st.markdown("---")
+                st.subheader("🎬 상세 참여 영화 목록")
+                
+                # 상세 영화 목록을 표시하는 부분
+                for index, row in top_df.iterrows():
+                    name = row['Name']
+                    movie_list = row['Movie_List'] # 참여 영화 리스트
+                    
+                    with st.expander(f"**#{index}: {name} ({row['Movie_Count']}편)**", expanded=False):
+                        if movie_list:
+                            # 리스트 항목을 개행 문자로 연결하여 Markdown으로 표시
+                            st.markdown("- " + "\n- ".join(movie_list))
+                        else:
+                            st.write("분석 기간 내 흥행 기록이 있는 참여 영화가 없습니다.")
                 
             else:
                 st.warning(f"분석 결과가 없습니다. 기준일에 흥행 기록이 있는 영화가 부족하거나, 설정된 개봉 연도 필터({start_year}년)와 일치하는 영화가 없습니다.")
