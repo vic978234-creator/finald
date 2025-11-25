@@ -40,15 +40,15 @@ def fetch_movie_list(list_key, start_year):
         st.error("🚨 KOBIS LIST API 키가 유효하지 않습니다. 32자리 키를 확인해 주세요.")
         return None
         
-    # itemPerPage를 100으로 수정하고 openStartDt를 YYYYMMDD 형식으로 사용합니다.
+    # itemPerPage를 100으로 사용하고 openStartDt를 YYYY 형식으로만 전송합니다. (이전 오류 해결 시도)
     params = {
         'key': list_key, 
-        'itemPerPage': 100, # <-- 100으로 복구
-        'openStartDt': f"{start_year}0101" # <-- YYYYMMDD 형식으로 수정
+        'itemPerPage': 100,
+        # YYYYMMDD 대신 YYYY 형식만 전송하도록 수정
+        'openStartDt': f"{start_year}" 
     }
     
     try:
-        # 수정된 params 사용
         response = requests.get(LIST_URL, params=params, timeout=10)
         response.raise_for_status() 
         data = response.json()
@@ -57,8 +57,9 @@ def fetch_movie_list(list_key, start_year):
         if 'faultInfo' in data:
             error_msg = data['faultInfo'].get('message', '알 수 없는 오류')
             
-            if '발급받지 않은 인증키' in error_msg or '유효하지 않은' in error_msg:
-                st.error(f"❌ 1단계 API 호출 오류: 키 인증 실패 또는 권한 오류가 의심됩니다. KOBIS LIST 키와 서비스 권한을 다시 확인해 주세요. (원인: {error_msg})")
+            if '발급받지 않은 인증키' in error_msg or '유효하지 않은' in error_msg or '검색년도는' in error_msg:
+                # API 오류 메시지가 연도 문제이더라도, 키 인증 문제일 가능성이 높음을 사용자에게 알립니다.
+                st.error(f"❌ 1단계 API 호출 오류: KOBIS LIST 키의 권한 문제 또는 인증 실패가 의심됩니다. 키와 서비스 권한을 다시 확인해 주세요. (원인: {error_msg})")
             else:
                 st.error(f"❌ 1단계 API 호출 오류: {error_msg}")
             return None
@@ -332,4 +333,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-    
