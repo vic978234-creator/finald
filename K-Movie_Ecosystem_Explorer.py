@@ -226,10 +226,12 @@ def analyze_hitmaker_index(movie_records, entity_type='Director'):
     df.index = df.index + 1
     df.index.name = 'Rank'
     
-    # 💡 수정 1: Y축에 사용할 순위+이름 조합 컬럼 생성
+    # 💡 Y축에 사용할 순위+이름 조합 컬럼 생성
     df['Rank_Name'] = df.index.map(str) + ". " + df['Name']
 
-    df['Total_Audience'] = df['Total_Audience'].apply(lambda x: f"{x:,.0f} 명")
+    # ❌ Plotly 차트에 전달할 데이터는 정수(int) 형태의 Total_Audience여야 하므로, 
+    # 포맷팅은 차트 생성 후 테이블 표시 직전에만 합니다.
+    df['Total_Audience_Formatted'] = df['Total_Audience'].apply(lambda x: f"{x:,.0f} 명")
     
     return df
 
@@ -504,8 +506,9 @@ def main():
                             'autorange': 'reversed' 
                         }, 
                         # X축: 값이 클수록 막대가 길어지도록 정방향으로 설정 (가장 긴 막대가 가장 큰 값)
+                        # 💡 수정: X축의 최솟값을 0으로 강제하기 위해 'autorange'를 제거하고 'range'만 사용
                         xaxis={
-                             'autorange': False,
+                             # X축 범위를 0부터 데이터 최대값의 1.1배까지 설정하여 0에서 시작하도록 강제
                              'range': [0, top_df['Sort_Index'].max() * 1.1] 
                         },
                         height=max(500, top_n * 30)
