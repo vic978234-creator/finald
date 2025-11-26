@@ -114,6 +114,9 @@ def get_full_analysis_data(boxoffice_key, detail_key, target_date):
         # 2단계: 상세 정보 호출 (DETAIL_KEY 사용)
         detail_info = fetch_movie_details(detail_key, movie_code)
         
+        # 💡 안정성 분석을 위해 순위 변동 폭 추가 (문자열 -> 정수)
+        rank_inten = int(box_office_item.get('rankInten', 0)) 
+        
         if detail_info:
             open_dt = detail_info.get('openDt', '99991231')
             
@@ -129,6 +132,7 @@ def get_full_analysis_data(boxoffice_key, detail_key, target_date):
                 'openDt': open_dt,
                 'watchGrade': watch_grade, 
                 'targetDate': target_date_dt, 
+                'rankInten': rank_inten, # 순위 변동 폭 추가
                 # 장르 정보 추출
                 'genres': [g['genreNm'] for g in detail_info.get('genres', [])],
             }
@@ -379,6 +383,42 @@ def analyze_movie_age(movie_records, target_date):
     
     return df, total_market_audience
 
+# 💡 새로운 분석 기능 추가: 흥행 안정성 분석
+def analyze_stability_rank(movie_records):
+    """
+    주간 박스오피스 순위 변동 폭(rankInten)을 기준으로 흥행 안정성을 분석합니다.
+    순위 변동 폭의 절댓값이 낮을수록 안정적입니다.
+    """
+    # 0이 아닌 유효한 순위 변동 데이터를 가진 영화만 필터링
+    stability_data = [
+        {
+            'movieNm': movie['movieNm'],
+            'audiCnt': movie['audiCnt'],
+            'rankInten': movie['rankInten'],
+            'absRankInten': abs(movie['rankInten']), # 순위 변동의 절댓값
+            'openDt': movie['openDt']
+        }
+        for movie in movie_records if abs(movie['rankInten']) != 9999 # 9999는 순위권 진입을 의미하며, 안정성 분석에서는 제외
+    ]
+
+    if not stability_data:
+        return pd.DataFrame()
+
+    # 순위 변동 폭(absRankInten)을 기준으로 오름차순 정렬 (변동이 적을수록 1위)
+    df = pd.DataFrame(stability_data).sort_values(
+        by='absRankInten', 
+        ascending=True # 변동이 적은 영화가 상위
+    ).reset_index(drop=True)
+    
+    df.index = df.index + 1
+    df.index.name = 'Rank'
+    
+    # 💡 표시용 컬럼 포맷팅
+    df['Total_Audience_Formatted'] = df['audiCnt'].apply(lambda x: f"{x:,.0f} 명")
+    df['Rank_Inten_Formatted'] = df['rankInten'].apply(lambda x: f"{x:+d}") # +d를 사용하여 부호 표시 (+5, -3)
+    
+    return df
+
 # ===============================================
 # 3. Streamlit 앱 레이아웃 및 기능 구현
 # ===============================================
@@ -427,14 +467,14 @@ def main():
 
     # -----------------------------------------------
     # 3.1 탭 구조로 분석 유형 분리
-    # (배급사 시장 점유율 탭 제거, 총 4개 탭)
     # -----------------------------------------------
     
-    tab1, tab2, tab3, tab4 = st.tabs([
+    tab1, tab2, tab3, tab4, tab5 = st.tabs([ # 5번 탭 추가
         "감독/회사 흥행 분석", 
         "장르별 흥행 트렌드", 
         "등급별 흥행 효과",
-        "영화 연령별 흥행 (신작/중기작/장기작)" # 탭 이름 변경
+        "영화 연령별 흥행 (신작/중기작/장기작)",
+        "흥행 안정성 분석" # 새로운 탭
     ])
     
     # Tab 1: 감독/회사 흥행 분석
@@ -506,7 +546,7 @@ def main():
                             'autorange': 'reversed' 
                         }, 
                         # X축: 값이 클수록 막대가 길어지도록 정방향으로 설정 (가장 긴 막대가 가장 큰 값)
-                        # 💡 수정: X축의 최솟값을 0으로 강제하기 위해 'autorange'를 제거하고 'range'만 사용
+                        # 💡 수정: X축의 최솟값을 0으로 강제
                         xaxis={
                              # X축 범위를 0부터 데이터 최대값의 1.1배까지 설정하여 0에서 시작하도록 강제
                              'range': [0, top_df['Sort_Index'].max() * 1.1] 
@@ -633,6 +673,29 @@ def main():
             st.dataframe(display_age_df, use_container_width=True, hide_index=False)
         else:
             st.warning("분석할 연령 데이터가 없습니다. (개봉일 정보가 누락되었거나, 흥행 영화가 없습니다.)")
+            
+    # Tab 5: 흥행 안정성 분석 (새로 추가)
+    with tab5:
+        st.subheader("📉 주간 순위 변동을 통한 흥행 안정성 분석")
+        st.markdown("주간 박스오피스 상위 100개 영화 중 순위 변동 폭이 가장 작은 영화(안정적인 흥행작) 순위를 분석합니다.")
+        
+        stability_df = analyze_stability_rank(movie_records)
+        
+        if not stability_df.empty:
+            st.markdown(f"**기준:** 순위 변동 폭 (`abs(rankInten)`)이 낮을수록 안정적이며, 1위입니다.")
+            
+            # 💡 막대 그래프 대신 순위 변동을 나타내는 테이블이 더 적합합니다.
+            display_stability_df = stability_df.rename(columns={
+                'movieNm': '영화 제목',
+                'Total_Audience_Formatted': '누적 관객 수',
+                'Rank_Inten_Formatted': '순위 변동',
+                'openDt': '개봉일',
+            })[['영화 제목', '누적 관객 수', '순위 변동', 'openDt']]
+            
+            st.dataframe(display_stability_df, use_container_width=True, hide_index=False)
+            
+        else:
+            st.warning("분석할 흥행 안정성 데이터가 없습니다. (순위 변동 정보가 없거나, 유효한 흥행 영화가 없습니다.)")
 
 
 if __name__ == "__main__":
