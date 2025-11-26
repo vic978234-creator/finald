@@ -497,11 +497,17 @@ def main():
                     fig.update_layout(
                         xaxis_title="총 누적 관객 수", 
                         yaxis_title=entity_selection, 
+                        # Y축: 순위대로 정렬 (1위가 가장 위에 오도록 reversed)
                         yaxis={
                             'categoryorder': 'array',
-                            'categoryarray': top_df_names_in_order, # 데이터프레임의 순서 그대로 사용
-                            'autorange': 'reversed' # 1위가 가장 위에 오도록 순위 뒤집기
+                            'categoryarray': top_df_names_in_order, 
+                            'autorange': 'reversed' 
                         }, 
+                        # X축: 값이 클수록 막대가 길어지도록 정방향으로 설정 (가장 긴 막대가 가장 큰 값)
+                        xaxis={
+                             'autorange': False,
+                             'range': [0, top_df['Sort_Index'].max() * 1.1] 
+                        },
                         height=max(500, top_n * 30)
                     )
                     st.plotly_chart(fig, use_container_width=True) 
@@ -579,6 +585,7 @@ def main():
                 xaxis_title="평균 관객 수", 
                 yaxis_title="관람 등급", 
                 yaxis={'categoryorder': 'total ascending'}, # 평균 관객 수 기준으로 정렬하여 1위가 위에 오도록 함
+                xaxis={'autorange': True}, # X축 순서가 바뀌는 것을 방지
                 height=400
             )
             st.plotly_chart(fig_bar, use_container_width=True)             
