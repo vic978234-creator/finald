@@ -7,44 +7,41 @@ from operator import itemgetter
 from datetime import datetime, timedelta
 
 # ===============================================
-# 1. 환경 설정 및 데이터 정의 (KOBIS API 사용)
+# 1. ENVIRONMENT SETTINGS AND DATA DEFINITION (KOBIS API)
 # ===============================================
 
 # --- API KEY ---
-# KOBIS API에서 발급받은 두 가지 키를 여기에 직접 입력합니다.
+# Two keys are directly inserted here from the user.
 # -----------------------------------------------------------
-# 1. 주간/주말 박스오피스 키 (흥행 영화 목록 가져오기)
+# 1. Weekly/Weekend Box Office Key (Used for fetching hit movie list)
 KOBIS_BOXOFFICE_KEY = "f6ae9fdbd8ba038eda177250d3e57b4c" 
 
-# 2. 영화 상세 정보 (DETAIL) 키: 감독/회사 정보 가져오기
+# 2. Movie Detail Key (Used for fetching detailed info like directors/companies)
 KOBIS_DETAIL_KEY = "f6ae9fdbd8ba038eda177250d3e57b4c" 
 # -----------------------------------------------------------
 
 
 # --- API URLS ---
-# 1. 주간/주말 박스오피스 API로 변경 (흥행 영화 목록 확보 목적)
 BOXOFFICE_URL = "http://www.kobis.or.kr/kobisopenapi/webservice/rest/boxoffice/searchWeeklyBoxOfficeList.json"
-# 2. 영화 상세 정보 API는 그대로 유지
 DETAIL_URL = "http://www.kobis.or.kr/kobisopenapi/webservice/rest/movie/searchMovieInfo.json"
+# New URL for daily box office data
+DAILY_URL = "http://www.kobis.or.kr/kobisopenapi/webservice/rest/boxoffice/searchDailyBoxOfficeList.json" 
 
 # ===============================================
-# 2. 데이터 처리 및 분석 로직
+# 2. DATA PROCESSING AND ANALYSIS LOGIC
 # ===============================================
 
-@st.cache_data(show_spinner="🎬 1단계: 주간 박스오피스 목록을 불러오는 중...")
+@st.cache_data(show_spinner="🎬 1. Fetching Weekly Box Office List...")
 def fetch_boxoffice_list(api_key, target_date):
-    """
-    KOBIS 주간 박스오피스 API를 호출하여 흥행 영화 목록을 가져옵니다.
-    :param target_date: 주간 박스오피스 기준일 (YYYYMMDD 형식)
-    """
+    """Fetches the list of top 100 movies from the weekly box office API."""
     if not api_key or len(api_key) != 32: 
-        st.error("🚨 KOBIS BOXOFFICE API 키가 유효하지 않습니다. 32자리 키를 확인해 주세요.")
+        st.error("🚨 KOBIS Box Office API Key is invalid. Please check the 32-digit key.")
         return None
         
     params = {
         'key': api_key, 
         'targetDt': target_date,
-        'weekGb': '0', # '0': 주간(월~일)
+        'weekGb': '0', # '0': Weekly (Mon~Sun)
     }
     
     try:
@@ -53,19 +50,19 @@ def fetch_boxoffice_list(api_key, target_date):
         data = response.json()
         
         if 'faultInfo' in data:
-            error_msg = data['faultInfo'].get('message', '알 수 없는 오류')
-            st.error(f"❌ 1단계 API 호출 오류: 키 인증 실패 또는 권한 오류가 의심됩니다. (원인: {error_msg})")
+            error_msg = data['faultInfo'].get('message', 'Unknown error')
+            st.error(f"❌ API Call Error (Step 1): Key authentication or permission issue suspected. (Reason: {error_msg})")
             return None
             
         boxoffice_list = data.get('boxOfficeResult', {}).get('weeklyBoxOfficeList', [])
-        st.success(f"1단계 완료: 총 {len(boxoffice_list)}개의 흥행 영화 코드를 가져왔습니다. (기준일: {target_date})")
+        st.success(f"Step 1 Complete: Fetched {len(boxoffice_list)} hit movie codes. (Reference Date: {target_date})")
         return boxoffice_list
     except requests.exceptions.RequestException as e:
-        st.error(f"❌ 1단계 API 요청 중 네트워크/연결 오류 발생: {e}")
+        st.error(f"❌ API Request Error (Step 1): Network/Connection failure. {e}")
         return None
 
 def fetch_movie_details(detail_key, movie_code):
-    """영화 상세 정보(관객수, 회사, 감독)를 가져옵니다."""
+    """Fetches detailed movie information (audience count, company, director)."""
     if not detail_key or len(detail_key) != 32:
         return None 
         
@@ -82,48 +79,79 @@ def fetch_movie_details(detail_key, movie_code):
     except requests.exceptions.RequestException:
         return None
 
-@st.cache_data(show_spinner="🎬 2단계: 상세 정보 및 관계 데이터 수집 중...")
+def fetch_daily_boxoffice(api_key, movie_code, target_date_dt):
+    """Fetches daily audience data for a movie over the last 7 days ending at target_date."""
+    daily_audience = defaultdict(int)
+    
+    # Calculate the 7-day range (Mon to Sun) ending at the target date
+    target_date = target_date_dt
+    start_date = target_date - timedelta(days=6)
+    
+    # KOBIS weekly uses Mon-Sun, so we need to iterate 7 days.
+    
+    current_dt = start_date
+    for _ in range(7):
+        date_str = current_dt.strftime("%Y%m%d")
+        
+        params = {
+            'key': api_key,
+            'targetDt': date_str,
+            'itemPerPage': 1,
+            'movieCd': movie_code # Search specifically for the movie code
+        }
+        
+        try:
+            response = requests.get(DAILY_URL, params=params, timeout=5)
+            data = response.json()
+            
+            daily_list = data.get('boxOfficeResult', {}).get('dailyBoxOfficeList', [])
+            
+            if daily_list:
+                audience = int(daily_list[0].get('audiCnt', 0))
+                daily_audience[current_dt.weekday()] = audience # 0=Mon, 6=Sun
+            
+        except (requests.exceptions.RequestException, ValueError):
+            pass # Skip if API call fails or data is malformed
+            
+        current_dt += timedelta(days=1)
+        
+    return daily_audience
+
+@st.cache_data(show_spinner="🎬 2. Collecting Detailed Information and Relationship Data...")
 def get_full_analysis_data(boxoffice_key, detail_key, target_date):
-    """
-    1, 2단계 API 호출을 통합하고 데이터 분석을 위한 DataFrame을 생성합니다.
-    """
+    """Integrates 1st and 2nd stage API calls and creates DataFrame for analysis."""
     
     if not boxoffice_key or not detail_key:
         return None 
         
-    # 1단계: 흥행 영화 목록 가져오기 (BOXOFFICE_KEY 사용)
     boxoffice_list = fetch_boxoffice_list(boxoffice_key, target_date)
     
     if boxoffice_list is None:
         return None 
 
     st.markdown("---")
-    st.subheader("🎬 2단계: 상세 정보 및 관계 데이터 수집 중...")
-    progress_bar = st.progress(0, text="각 영화의 감독, 회사, 장르, 등급 정보를 수집 중입니다...")
+    st.subheader("🎬 Step 2: Collecting Detailed Data and Relationships...")
+    progress_bar = st.progress(0, text="Collecting director, company, genre, and rating data for each movie...")
     
     movie_records = []
     total_movies = len(boxoffice_list)
     
-    # 박스오피스 기준일 (datetime 객체로 변환하여 연령 분석에 사용)
     target_date_dt = datetime.strptime(target_date, "%Y%m%d").date()
     
     for i, box_office_item in enumerate(boxoffice_list):
         movie_code = box_office_item['movieCd']
         
-        # 2단계: 상세 정보 호출 (DETAIL_KEY 사용)
         detail_info = fetch_movie_details(detail_key, movie_code)
         
-        # 💡 안정성 분석을 위해 순위 변동 폭 추가 (문자열 -> 정수)
+        # 💡 Fetch daily audience data (new functionality)
+        daily_audience_data = fetch_daily_boxoffice(boxoffice_key, movie_code, target_date_dt)
+        
         rank_inten = int(box_office_item.get('rankInten', 0)) 
         
         if detail_info:
             open_dt = detail_info.get('openDt', '99991231')
-            
-            # 누적 관객수(`audiAcc`)는 BoxOffice API에서 가져온 것을 사용합니다.
             audi_cnt = int(box_office_item.get('audiAcc', '0'))
-            
-            # 관람 등급 정보 추출
-            watch_grade = detail_info.get('audits', [{}])[0].get('watchGradeNm', '등급 없음')
+            watch_grade = detail_info.get('audits', [{}])[0].get('watchGradeNm', 'Not Rated')
 
             record = {
                 'movieNm': box_office_item.get('movieNm'),
@@ -131,26 +159,23 @@ def get_full_analysis_data(boxoffice_key, detail_key, target_date):
                 'openDt': open_dt,
                 'watchGrade': watch_grade, 
                 'targetDate': target_date_dt, 
-                'rankInten': rank_inten, # 순위 변동 폭 추가
-                # 장르 정보 추출
+                'rankInten': rank_inten, 
+                'dailyAudience': daily_audience_data, # Daily audience data added
                 'genres': [g['genreNm'] for g in detail_info.get('genres', [])],
             }
             
-            # 감독 정보 추출
             directors = [(d['peopleNm'], record['movieNm'], audi_cnt, record['openDt']) for d in detail_info.get('directors', [])]
             record['directors'] = directors
             
-            # 회사(제작사/배급사) 및 순수 배급사 정보 추출
             companies = []
             distributors = []
             for company in detail_info.get('companys', []):
                 role = company.get('companyPartNm', '')
-                if '제작' in role or '배급' in role:
-                    companies.append((company.get('companyNm', '미상'), record['movieNm'], audi_cnt, role, record['openDt']))
+                if 'Producer' in role or 'Distributor' in role or '제작' in role or '배급' in role:
+                    companies.append((company.get('companyNm', 'Unknown'), record['movieNm'], audi_cnt, role, record['openDt']))
                 
-                # 순수 배급사 목록 (시장 점유율 분석용)
-                if '배급' in role:
-                    distributors.append((company.get('companyNm', '미상'), record['movieNm'], audi_cnt, role, record['openDt']))
+                if 'Distributor' in role or '배급' in role:
+                    distributors.append((company.get('companyNm', 'Unknown'), record['movieNm'], audi_cnt, role, record['openDt']))
 
             record['companies'] = companies
             record['distributors'] = distributors
@@ -160,15 +185,12 @@ def get_full_analysis_data(boxoffice_key, detail_key, target_date):
         progress_bar.progress((i + 1) / total_movies)
         
     progress_bar.empty()
-    st.success("2단계 완료: 모든 영화의 상세 정보 및 관계 데이터 수집 완료.")
+    st.success("Step 2 Complete: Detailed information and relationship data collection complete.")
     
     return movie_records
 
 def analyze_hitmaker_index(movie_records, entity_type='Director'):
-    """
-    감독 또는 회사의 총 관객 수(Total Audience)를 계산하고 DataFrame을 생성합니다.
-    (총 관객 수 기준 Top 30)
-    """
+    """Analyzes Total Audience Contribution by Director or Company (Top 30)."""
     entity_data = defaultdict(lambda: {
         'total_audience': 0, 
         'movie_count': 0, 
@@ -220,28 +242,22 @@ def analyze_hitmaker_index(movie_records, entity_type='Director'):
         return pd.DataFrame() 
 
     try:
-        # Sort_Index (총 관객 수) 기준으로 내림차순 정렬
         df = pd.DataFrame(results).sort_values(by='Sort_Index', ascending=False).reset_index(drop=True)
     except KeyError:
-        st.error("데이터프레임 구조 오류: 분석 키('Sort_Index')를 찾을 수 없습니다.")
+        st.error("DataFrame Structure Error: Analysis key ('Sort_Index') not found.")
         return pd.DataFrame()
 
     df.index = df.index + 1
     df.index.name = 'Rank'
     
-    # 💡 Y축에 사용할 순위+이름 조합 컬럼 생성
     df['Rank_Name'] = df.index.map(str) + ". " + df['Name']
 
-    # ❌ Plotly 차트에 전달할 데이터는 정수(int) 형태의 Total_Audience여야 하므로, 
-    # 포맷팅은 차트 생성 후 테이블 표시 직전에만 합니다.
-    df['Total_Audience_Formatted'] = df['Total_Audience'].apply(lambda x: f"{x:,.0f} 명")
+    df['Total_Audience_Formatted'] = df['Total_Audience'].apply(lambda x: f"{x:,.0f} people")
     
     return df
 
 def analyze_genre_trends(movie_records):
-    """
-    수집된 데이터를 기반으로 장르별 흥행 트렌드(총 관객 수, 영화 수, 점유율)를 계산합니다.
-    """
+    """Calculates weekly box office trends by genre (Total Audience, Share)."""
     genre_data = defaultdict(lambda: {'total_audience': 0, 'movie_count': 0, 'movie_list': []})
     total_market_audience = sum(movie['audiCnt'] for movie in movie_records)
     
@@ -256,7 +272,6 @@ def analyze_genre_trends(movie_records):
             genre_data[genre_name]['total_audience'] += audience
             genre_data[genre_name]['movie_count'] += 1
             
-            # 💡 수정: 영화 목록 저장
             if audience > 0:
                 genre_data[genre_name]['movie_list'].append({
                     'name': movie['movieNm'],
@@ -268,7 +283,6 @@ def analyze_genre_trends(movie_records):
         if data['total_audience'] > 0:
             share = (data['total_audience'] / total_market_audience) * 100 if total_market_audience > 0 else 0
             
-            # 💡 수정: 영화 목록을 표시용 문자열로 변환
             sorted_movies = sorted(data['movie_list'], key=lambda x: x['open_dt'], reverse=True)
             movie_display_list = [f"{m['name']} ({m['open_dt'][:4]})" for m in sorted_movies]
             
@@ -277,7 +291,7 @@ def analyze_genre_trends(movie_records):
                 'Total_Audience': int(data['total_audience']),
                 'Movie_Count': data['movie_count'],
                 'Audience_Share_Percentage': share,
-                'Movie_List': movie_display_list # 영화 목록 추가
+                'Movie_List': movie_display_list # Movie list added
             })
 
     if not results:
@@ -287,15 +301,13 @@ def analyze_genre_trends(movie_records):
     df.index = df.index + 1
     df.index.name = 'Rank'
     
-    df['Total_Audience_Formatted'] = df['Total_Audience'].apply(lambda x: f"{x:,.0f} 명")
+    df['Total_Audience_Formatted'] = df['Total_Audience'].apply(lambda x: f"{x:,.0f} people")
     df['Audience_Share_Formatted'] = df['Audience_Share_Percentage'].apply(lambda x: f"{x:.1f} %")
     
     return df, total_market_audience
 
 def analyze_rating_impact(movie_records):
-    """
-    수집된 데이터를 기반으로 등급별 흥행 효과(평균 관객 수, 점유율)를 계산합니다.
-    """
+    """Calculates the box office impact by age rating (Avg. Audience, Share)."""
     rating_data = defaultdict(lambda: {'total_audience': 0, 'movie_count': 0, 'movie_list': []})
     total_market_audience = sum(movie['audiCnt'] for movie in movie_records)
     
@@ -309,7 +321,6 @@ def analyze_rating_impact(movie_records):
         rating_data[rating]['total_audience'] += audience
         rating_data[rating]['movie_count'] += 1
         
-        # 💡 수정: 영화 목록 저장
         rating_data[rating]['movie_list'].append({
             'name': movie['movieNm'],
             'open_dt': movie['openDt']
@@ -321,7 +332,6 @@ def analyze_rating_impact(movie_records):
             avg_audience = data['total_audience'] / data['movie_count']
             share = (data['total_audience'] / total_market_audience) * 100 if total_market_audience > 0 else 0
             
-            # 💡 수정: 영화 목록을 표시용 문자열로 변환
             sorted_movies = sorted(data['movie_list'], key=lambda x: x['open_dt'], reverse=True)
             movie_display_list = [f"{m['name']} ({m['open_dt'][:4]})" for m in sorted_movies]
             
@@ -331,28 +341,24 @@ def analyze_rating_impact(movie_records):
                 'Movie_Count': data['movie_count'],
                 'Avg_Audience': int(avg_audience),
                 'Audience_Share_Percentage': share,
-                'Movie_List': movie_display_list # 영화 목록 추가
+                'Movie_List': movie_display_list
             })
 
     if not results:
         return pd.DataFrame(), 0
 
-    # 평균 관객 수 기준으로 내림차순 정렬
     df = pd.DataFrame(results).sort_values(by='Avg_Audience', ascending=False).reset_index(drop=True)
     df.index = df.index + 1
     df.index.name = 'Rank'
     
-    df['Total_Audience_Formatted'] = df['Total_Audience'].apply(lambda x: f"{x:,.0f} 명")
-    df['Avg_Audience_Formatted'] = df['Avg_Audience'].apply(lambda x: f"{x:,.0f} 명")
+    df['Total_Audience_Formatted'] = df['Total_Audience'].apply(lambda x: f"{x:,.0f} people")
+    df['Avg_Audience_Formatted'] = df['Avg_Audience'].apply(lambda x: f"{x:,.0f} people")
     df['Audience_Share_Formatted'] = df['Audience_Share_Percentage'].apply(lambda x: f"{x:.1f} %")
     
     return df, total_market_audience
 
 def analyze_movie_age(movie_records, target_date):
-    """
-    개봉일과 기준일을 비교하여 영화 연령대별 흥행을 분석합니다.
-    (그룹 이름을 신작, 중기작, 장기작으로 변경)
-    """
+    """Analyzes box office performance by movie age (New, Mid-Term, Veteran)."""
     age_data = defaultdict(lambda: {'total_audience': 0, 'movie_count': 0, 'movie_list': []})
     total_market_audience = sum(movie['audiCnt'] for movie in movie_records)
     
@@ -367,13 +373,11 @@ def analyze_movie_age(movie_records, target_date):
             open_date = datetime.strptime(open_dt_str, "%Y%m%d").date()
             days_since_open = (target_date - open_date).days
         except ValueError:
-            # 개봉일 데이터 형식이 잘못된 경우 스킵
             continue
 
-        # 그룹 이름을 신작, 중기작, 장기작으로 변경
         if days_since_open <= 7:
             age_group = "신작 (New Release)"
-        elif days_since_open <= 28: # 2~4주차
+        elif days_since_open <= 28:
             age_group = "중기작 (Mid-Term)"
         else:
             age_group = "장기작 (Veteran)"
@@ -381,7 +385,6 @@ def analyze_movie_age(movie_records, target_date):
         age_data[age_group]['total_audience'] += audience
         age_data[age_group]['movie_count'] += 1
         
-        # 💡 수정: 영화 목록 저장
         age_data[age_group]['movie_list'].append({
             'name': movie['movieNm'],
             'open_dt': movie['openDt']
@@ -392,7 +395,6 @@ def analyze_movie_age(movie_records, target_date):
         if data['total_audience'] > 0:
             share = (data['total_audience'] / total_market_audience) * 100 if total_market_audience > 0 else 0
             
-            # 💡 수정: 영화 목록을 표시용 문자열로 변환
             sorted_movies = sorted(data['movie_list'], key=lambda x: x['open_dt'], reverse=True)
             movie_display_list = [f"{m['name']} ({m['open_dt'][:4]})" for m in sorted_movies]
             
@@ -401,7 +403,7 @@ def analyze_movie_age(movie_records, target_date):
                 'Total_Audience': int(data['total_audience']),
                 'Movie_Count': data['movie_count'],
                 'Audience_Share_Percentage': share,
-                'Movie_List': movie_display_list # 영화 목록 추가
+                'Movie_List': movie_display_list
             })
 
     if not results:
@@ -411,54 +413,93 @@ def analyze_movie_age(movie_records, target_date):
     df.index = df.index + 1
     df.index.name = 'Rank'
     
-    df['Total_Audience_Formatted'] = df['Total_Audience'].apply(lambda x: f"{x:,.0f} 명")
+    df['Total_Audience_Formatted'] = df['Total_Audience'].apply(lambda x: f"{x:,.0f} people")
     df['Audience_Share_Formatted'] = df['Audience_Share_Percentage'].apply(lambda x: f"{x:.1f} %")
     
     return df, total_market_audience
 
-# 💡 새로운 분석 기능 추가: 흥행 안정성 분석
 def analyze_stability_rank(movie_records):
-    """
-    주간 박스오피스 순위 변동 폭(rankInten)을 기준으로 흥행 안정성을 분석합니다.
-    순위 변동 폭의 절댓값이 낮을수록 안정적입니다.
-    """
-    # 0이 아닌 유효한 순위 변동 데이터를 가진 영화만 필터링
+    """Analyzes ranking stability based on the absolute change in rank (rankInten)."""
     stability_data = [
         {
             'movieNm': movie['movieNm'],
             'audiCnt': movie['audiCnt'],
             'rankInten': movie['rankInten'],
-            'absRankInten': abs(movie['rankInten']), # 순위 변동의 절댓값
+            'absRankInten': abs(movie['rankInten']), 
             'openDt': movie['openDt']
         }
-        for movie in movie_records if abs(movie['rankInten']) != 9999 # 9999는 순위권 진입을 의미하며, 안정성 분석에서는 제외
+        for movie in movie_records if abs(movie['rankInten']) != 9999 
     ]
 
     if not stability_data:
         return pd.DataFrame()
 
-    # 순위 변동 폭(absRankInten)을 기준으로 오름차순 정렬 (변동이 적을수록 1위)
     df = pd.DataFrame(stability_data).sort_values(
         by='absRankInten', 
-        ascending=True # 변동이 적은 영화가 상위
+        ascending=True 
     ).reset_index(drop=True)
     
     df.index = df.index + 1
     df.index.name = 'Rank'
     
-    # 💡 표시용 컬럼 포맷팅
-    # movieNm은 rename이 아닌, 원래 컬럼명으로 존재해야 함.
-    df['Total_Audience_Formatted'] = df['audiCnt'].apply(lambda x: f"{x:,.0f} 명")
-    df['Rank_Inten_Formatted'] = df['rankInten'].apply(lambda x: f"{x:+d}") # +d를 사용하여 부호 표시 (+5, -3)
+    df['Total_Audience_Formatted'] = df['audiCnt'].apply(lambda x: f"{x:,.0f} people")
+    df['Rank_Inten_Formatted'] = df['rankInten'].apply(lambda x: f"{x:+d}")
+    
+    return df
+
+def analyze_daily_trend(movie_records):
+    """Analyzes weekly audience split: Weekday (Mon-Fri) vs. Weekend (Sat-Sun)."""
+    
+    # Day indices: 0=Mon, 1=Tue, 2=Wed, 3=Thu, 4=Fri, 5=Sat, 6=Sun
+    weekday_indices = [0, 1, 2, 3, 4]
+    weekend_indices = [5, 6]
+    
+    results = []
+    
+    for movie in movie_records:
+        daily_aud = movie.get('dailyAudience', {})
+        total_weekly_aud = movie['audiCnt']
+        
+        if not daily_aud or total_weekly_aud == 0:
+            continue
+            
+        weekday_aud = sum(daily_aud[i] for i in weekday_indices)
+        weekend_aud = sum(daily_aud[i] for i in weekend_indices)
+        
+        # Calculate dependency and efficiency
+        weekend_dependency = (weekend_aud / total_weekly_aud) * 100 if total_weekly_aud > 0 else 0
+        
+        # We calculate the relative strength of weekdays vs. weekends
+        # If Weekend Dependency is low, Weekday Efficiency is considered high.
+        
+        results.append({
+            'Movie_Name': movie['movieNm'],
+            'Total_Weekly_Audience': total_weekly_aud,
+            'Weekend_Audience': weekend_aud,
+            'Weekday_Audience': weekday_aud,
+            'Weekend_Dependency_Ratio': weekend_dependency, # High ratio means high weekend reliance
+            'Open_Date': movie['openDt']
+        })
+
+    if not results:
+        return pd.DataFrame()
+
+    df = pd.DataFrame(results).sort_values(by='Weekend_Dependency_Ratio', ascending=False).reset_index(drop=True)
+    df.index = df.index + 1
+    df.index.name = 'Rank'
+    
+    # Format columns for display
+    df['Total_Audience_Formatted'] = df['Total_Weekly_Audience'].apply(lambda x: f"{x:,.0f} people")
+    df['Weekend_Dependency_Formatted'] = df['Weekend_Dependency_Ratio'].apply(lambda x: f"{x:.1f} %")
     
     return df
 
 # ===============================================
-# 3. Streamlit 앱 레이아웃 및 기능 구현
+# 3. STREAMLIT APP LAYOUT AND IMPLEMENTATION
 # ===============================================
 
 def main():
-    """Streamlit 앱의 메인 함수"""
+    """Streamlit App Main Function"""
     
     st.set_page_config(
         page_title="K-Movie Ecosystem Explorer",
@@ -466,64 +507,63 @@ def main():
         initial_sidebar_state="auto"
     )
 
-    st.title("🎬 K-Movie Ecosystem Explorer (영화 산업 분석 - 박스오피스 기반)")
+    st.title("🎬 K-Movie Ecosystem Explorer (Box Office Analysis)")
     st.markdown("---")
     
-    # --- 사이드바 필터 설정 ---
-    st.sidebar.header("🔍 데이터 필터 설정")
+    # --- Sidebar Filter Settings ---
+    st.sidebar.header("🔍 Data Filter Settings")
     
-    # 주간 박스오피스 기준일 (최근 일요일로 설정)
+    # Weekly Box Office Reference Date (Setting to the most recent Sunday)
     today = datetime.today()
     days_to_subtract = (today.weekday() - 6) % 7
     default_date = today - timedelta(days=days_to_subtract)
     target_date_dt = st.sidebar.date_input(
-        "주간 박스오피스 기준일 (일요일):",
+        "Weekly Box Office Reference Date (Sunday):",
         value=default_date,
         max_value=today,
-        help="선택한 날짜의 주간 박스오피스 상위 100개 영화를 기준으로 데이터를 가져옵니다."
+        help="Data is collected based on the top 100 movies from the weekly box office ending on this date."
     )
-    # 최소 개봉 연도 선택 (분석 필터)는 제거됨
     target_date_str = target_date_dt.strftime("%Y%m%d")
 
     st.sidebar.markdown("---")
-    # --- 필터 설정 끝 ---
+    # --- Filter Settings End ---
 
-    # 1. 데이터 로드 (캐싱된 데이터 사용)
-    # 최소 개봉 연도 필터(start_year)를 사용하지 않으므로 인자에서 제거
+    # 1. Data Load (Cashed Data Used)
     movie_records = get_full_analysis_data(KOBIS_BOXOFFICE_KEY, KOBIS_DETAIL_KEY, target_date_str) 
     
     if movie_records is None or not movie_records: 
-        st.warning("데이터 수집에 실패했거나, 흥행 기록이 있는 영화가 수집되지 않았습니다. 기준 날짜를 변경하거나 API 키를 확인해 주세요.")
+        st.warning("Data collection failed, or no valid box office records were collected. Please check the reference date or API keys.")
         st.stop()
         
     st.markdown("---")
-    st.subheader("📊 3단계: 데이터 분석 및 시각화")
+    st.subheader("📊 Step 3: Data Analysis and Visualization")
 
     # -----------------------------------------------
-    # 3.1 탭 구조로 분석 유형 분리
+    # 3.1 Tab Structure for Analysis Types (6 Tabs)
     # -----------------------------------------------
     
-    tab1, tab2, tab3, tab4, tab5 = st.tabs([ # 5번 탭 추가
-        "감독/회사 흥행 분석", 
-        "장르별 흥행 트렌드", 
-        "등급별 흥행 효과",
-        "영화 연령별 흥행 (신작/중기작/장기작)",
-        "흥행 안정성 분석" # 새로운 탭
+    tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([ 
+        "Director/Company Contribution", 
+        "Genre Trend Analysis", 
+        "Rating Impact",
+        "Movie Age Analysis (New/Mid/Veteran)",
+        "Stability Analysis (Rank Change)",
+        "Daily Trend Analysis (Weekend Reliance)" # New Tab
     ])
     
-    # Tab 1: 감독/회사 흥행 분석
+    # Tab 1: Director/Company Contribution
     with tab1:
-        st.subheader("👨‍💼 감독 및 회사별 총 관객 수 기여 분석")
+        st.subheader("👨‍💼 Director and Company Total Audience Contribution Analysis")
         
         col_select_1, col_select_2 = st.columns([1, 1])
         
         with col_select_1:
             entity_selection = st.radio(
-                "분석 대상 선택:",
+                "Select Entity for Analysis:",
                 ('Director', 'Company'),
                 key='entity_select',
                 index=0,
-                help="감독 또는 회사(제작/배급)를 기준으로 흥행 지수를 분석합니다."
+                help="Analyzes box office index based on Director or Company (Production/Distribution)."
             )
         
         st.markdown("---")
@@ -533,58 +573,48 @@ def main():
         with col_info_1:
             if 'initial_run' not in st.session_state:
                 st.session_state['initial_run'] = True
-            analyze_button = st.button(f"'{entity_selection}' 흥행 분석 실행", use_container_width=True, key='analyze_tab1_btn')
+            analyze_button = st.button(f"Analyze '{entity_selection}' Box Office", use_container_width=True, key='analyze_tab1_btn')
 
         with col_info_2:
             st.info(f"""
-                **분석 기준: 총 관객 수 (절대적 규모)**
-                선택된 {entity_selection}이 참여한 모든 영화의 **누적 관객 수 합계**를 기준으로 순위가 결정됩니다.
+                **Analysis Criterion: Total Audience (Absolute Volume)**
+                The ranking is determined by the **sum of cumulative audience count** for all movies the selected {entity_selection} participated in.
             """)
             
         if analyze_button or st.session_state.get('initial_run', True):
             st.session_state['initial_run'] = False 
             
-            with st.spinner(f"'{entity_selection}'의 총 관객수를 계산 중입니다..."):
+            with st.spinner(f"Calculating '{entity_selection}' total audience contribution..."):
                 analysis_df = analyze_hitmaker_index(movie_records, entity_selection)
                 
                 if not analysis_df.empty:
                     top_n = 30 
                     top_df = analysis_df.head(top_n).copy()
                     
-                    st.subheader(f"🏆 Top {top_n} {entity_selection} 흥행 분석 (총 관객 수)")
+                    st.subheader(f"🏆 Top {top_n} {entity_selection} Box Office Analysis (Total Audience)")
                     
-                    # 💡 그래프 순서 최종 수정 (Rank_Name 컬럼 사용)
-                    # Plotly bar chart
                     fig = px.bar(
                         top_df,
-                        x='Sort_Index', # 정수 값인 Sort_Index 사용
-                        y='Rank_Name', # 순위+이름 조합 컬럼 사용
+                        x='Sort_Index', 
+                        y='Rank_Name', 
                         orientation='h',
-                        title=f"Top {top_n} {entity_selection} Total Audience Count (기준일: {target_date_str})",
+                        title=f"Top {top_n} {entity_selection} Total Audience Count (Reference Date: {target_date_str})",
                         color='Sort_Index',
                         color_continuous_scale=px.colors.sequential.Teal,
-                        hover_data={
-                            'Sort_Index': ':.0f', # 툴팁에 포맷팅되지 않은 값 대신 Sort_Index 사용
-                            'Movie_Count': True
-                        }
+                        hover_data={'Sort_Index': ':.0f', 'Movie_Count': True}
                     ) 
                     
-                    # Y축 순서를 데이터프레임의 순서(1위부터 30위까지)와 일치시키고,
-                    # Y축을 강제로 뒤집어(reversed) 1위 항목이 그래프의 가장 위에 오도록 합니다.
                     top_df_names_in_order = top_df['Rank_Name'].tolist()
                     
                     fig.update_layout(
-                        xaxis_title="총 누적 관객 수", 
+                        xaxis_title="Total Cumulative Audience", 
                         yaxis_title=entity_selection, 
-                        # Y축: 순위대로 정렬 (1위가 가장 위에 오도록 reversed)
                         yaxis={
                             'categoryorder': 'array',
                             'categoryarray': top_df_names_in_order, 
                             'autorange': 'reversed' 
                         }, 
-                        # X축: 값이 클수록 막대가 길어지도록 정방향으로 설정 (가장 긴 막대가 가장 큰 값)
                         xaxis={
-                             # X축 범위를 0부터 데이터 최대값의 1.1배까지 설정하여 0에서 시작하도록 강제
                              'range': [0, top_df['Sort_Index'].max() * 1.1] 
                         },
                         height=max(500, top_n * 30)
@@ -592,166 +622,217 @@ def main():
                     st.plotly_chart(fig, use_container_width=True) 
 
                     display_df = top_df.rename(columns={
-                        'Name': '이름',
-                        'Movie_Count': '총 참여 영화 수',
-                        'Total_Audience_Formatted': '총 관객 수 (명)',
-                    })[['이름', '총 참여 영화 수', '총 관객 수 (명)']] 
+                        'Name': 'Name',
+                        'Movie_Count': 'Total Movies Participated',
+                        'Total_Audience_Formatted': 'Total Audience (people)',
+                    })[['Name', 'Total Movies Participated', 'Total Audience (people)']] 
                     
                     st.dataframe(display_df, use_container_width=True, hide_index=True)
                     
                     st.markdown("---")
-                    st.subheader("🎬 상세 참여 영화 목록")
+                    st.subheader("🎬 Detailed List of Participated Movies")
                     
                     for index, row in top_df.iterrows():
                         name = row['Name']
                         movie_list = row['Movie_List'] 
-                        with st.expander(f"**#{index}: {name} ({row['Movie_Count']}편)**", expanded=False):
-                            st.markdown("- " + "\n- ".join(movie_list) if movie_list else "분석 기간 내 흥행 기록이 있는 참여 영화가 없습니다.")
+                        with st.expander(f"**#{index}: {name} ({row['Movie_Count']} movies)**", expanded=False):
+                            st.markdown("- " + "\n- ".join(movie_list) if movie_list else "No box office record movies found in the analysis period.")
                 else:
-                    st.warning(f"분석 결과가 없습니다. 기준일에 흥행 기록이 있는 영화가 부족하거나, 설정된 개봉 연도 필터와 일치하는 영화가 없습니다.")
+                    st.warning(f"No analysis results. Check if there are enough movies with box office records for the period.")
 
-    # Tab 2: 장르별 흥행 트렌드 (탭 순서 변경됨)
+    # Tab 2: Genre Trend Analysis
     with tab2:
-        st.subheader("📈 장르별 주간 흥행 트렌드 분석")
-        st.markdown("선택된 주간 박스오피스 상위 영화를 기준으로 장르별 총 관객 수와 시장 점유율을 분석합니다.")
+        st.subheader("📈 Genre Weekly Box Office Trend Analysis")
+        st.markdown("Analyzes total audience and market share by genre based on the top weekly box office movies.")
         
         genre_df, total_audience = analyze_genre_trends(movie_records)
         
         if not genre_df.empty:
-            st.markdown(f"**총 분석 관객 수:** {total_audience:,.0f} 명")
+            st.markdown(f"**Total Audience Analyzed:** {total_audience:,.0f} people")
             
             fig_pie = px.pie(
                 genre_df,
                 values='Total_Audience',
                 names='Genre_Name',
-                title='장르별 주간 관객 수 점유율',
+                title='Weekly Audience Share by Genre',
                 color_discrete_sequence=px.colors.qualitative.Pastel
             )
             fig_pie.update_traces(textinfo='percent+label', marker=dict(line=dict(color='#000000', width=1)))
-            st.plotly_chart(fig_pie, use_container_width=True)             
+            st.plotly_chart(fig_pie, use_container_width=True) 
+            
             display_genre_df = genre_df.rename(columns={
-                'Genre_Name': '장르',
-                'Movie_Count': '총 참여 영화 수',
-                'Total_Audience_Formatted': '총 관객 수 (명)',
-                'Audience_Share_Formatted': '관객 점유율',
-            })[['장르', '총 참여 영화 수', '총 관객 수 (명)', '관객 점유율']]
+                'Genre_Name': 'Genre',
+                'Movie_Count': 'Total Movies',
+                'Total_Audience_Formatted': 'Total Audience (people)',
+                'Audience_Share_Formatted': 'Audience Share',
+            })[['Genre', 'Total Movies', 'Total Audience (people)', 'Audience Share']]
             st.dataframe(display_genre_df, use_container_width=True, hide_index=False)
-        else:
-            st.warning("분석할 장르 데이터가 없습니다. (KOBIS API에서 장르 정보가 누락되었거나, 흥행 영화가 없습니다.)")
+            
+            st.markdown("---")
+            st.subheader("🎬 Detailed List of Movies per Genre")
+            for index, row in genre_df.iterrows():
+                name = row['Genre_Name']
+                movie_list = row['Movie_List'] 
+                with st.expander(f"**#{index}: {name} ({row['Movie_Count']} movies)**", expanded=False):
+                    st.markdown("- " + "\n- ".join(movie_list) if movie_list else "No box office record movies found in this genre.")
 
-    # Tab 3: 등급별 흥행 효과 분석 (탭 순서 변경됨)
+        else:
+            st.warning("No genre data for analysis.")
+
+    # Tab 3: Rating Impact Analysis
     with tab3:
-        st.subheader("🔞 등급별 평균 흥행력 및 시장 기여도 분석")
-        st.markdown("선택된 주간 박스오피스 상위 영화를 기준으로 관람 등급별 평균 관객 수를 분석합니다. (등급별 흥행 잠재력 평가)")
+        st.subheader("🔞 Box Office Impact Analysis by Age Rating")
+        st.markdown("Analyzes the average audience count by age rating among the top weekly box office movies (Evaluating rating potential).")
         
         rating_df, total_audience = analyze_rating_impact(movie_records)
         
         if not rating_df.empty:
-            st.markdown(f"**총 분석 관객 수:** {total_audience:,.0f} 명")
+            st.markdown(f"**Total Audience Analyzed:** {total_audience:,.0f} people")
             
             fig_bar = px.bar(
                 rating_df,
                 x='Avg_Audience',
                 y='Rating_Name',
                 orientation='h',
-                title='등급별 영화 1편당 평균 관객 수',
+                title='Average Audience Count per Movie by Rating',
                 color='Audience_Share_Percentage',
                 color_continuous_scale=px.colors.sequential.Sunset,
                 hover_data={'Avg_Audience': ':.0f', 'Movie_Count': True, 'Audience_Share_Percentage': ':.1f'}
             )
-            # Y축 순서를 평균 관객 수 기준으로 정렬 (내림차순)
             fig_bar.update_layout(
-                xaxis_title="평균 관객 수", 
-                yaxis_title="관람 등급", 
-                yaxis={'categoryorder': 'total ascending'}, # 평균 관객 수 기준으로 정렬하여 1위가 위에 오도록 함
-                xaxis={'autorange': True}, # X축 순서가 바뀌는 것을 방지
+                xaxis_title="Average Audience Count", 
+                yaxis_title="Age Rating", 
+                yaxis={'categoryorder': 'total ascending'}, 
+                xaxis={'autorange': True}, 
                 height=400
             )
-            st.plotly_chart(fig_bar, use_container_width=True)             
+            st.plotly_chart(fig_bar, use_container_width=True) 
+            
             display_rating_df = rating_df.rename(columns={
-                'Rating_Name': '관람 등급',
-                'Movie_Count': '총 참여 영화 수',
-                'Total_Audience_Formatted': '총 관객 수 (명)',
-                'Avg_Audience_Formatted': '평균 관객 수 (명)',
-                'Audience_Share_Formatted': '관객 점유율',
-            })[['관람 등급', '총 참여 영화 수', '평균 관객 수 (명)', '총 관객 수 (명)', '관객 점유율']]
+                'Rating_Name': 'Age Rating',
+                'Movie_Count': 'Total Movies',
+                'Total_Audience_Formatted': 'Total Audience (people)',
+                'Avg_Audience_Formatted': 'Average Audience (people)',
+                'Audience_Share_Formatted': 'Audience Share',
+            })[['Age Rating', 'Total Movies', 'Average Audience (people)', 'Total Audience (people)', 'Audience Share']]
             st.dataframe(display_rating_df, use_container_width=True, hide_index=False)
             
-            # 💡 수정: 영화 목록 상세 정보 출력
             st.markdown("---")
-            st.subheader("🎬 등급별 상세 참여 영화 목록")
+            st.subheader("🎬 Detailed List of Movies per Rating")
             for index, row in rating_df.iterrows():
                 name = row['Rating_Name']
                 movie_list = row['Movie_List'] 
-                with st.expander(f"**#{index}: {name} ({row['Movie_Count']}편)**", expanded=False):
-                    st.markdown("- " + "\n- ".join(movie_list) if movie_list else "분석 기간 내 흥행 기록이 있는 참여 영화가 없습니다.")
+                with st.expander(f"**#{index}: {name} ({row['Movie_Count']} movies)**", expanded=False):
+                    st.markdown("- " + "\n- ".join(movie_list) if movie_list else "No box office record movies found in this rating.")
 
         else:
-            st.warning("분석할 등급 데이터가 없습니다. (KOBIS API에서 등급 정보가 누락되었거나, 흥행 영화가 없습니다.)")
+            st.warning("No rating data for analysis.")
 
-    # Tab 4: 영화 연령별 흥행 분석 (탭 순서 변경 및 이름 변경됨)
+    # Tab 4: Movie Age Analysis
     with tab4:
-        st.subheader("📅 영화 연령별 시장 역동성 분석 (신작, 중기작, 장기작)")
-        st.markdown("개봉일과 기준일을 비교하여 신작, 중기작, 장기 흥행작의 관객 점유율을 분석합니다. (시장 역동성 파악)")
+        st.subheader("📅 Movie Age Market Dynamics Analysis (New/Mid-Term/Veteran)")
+        st.markdown("Analyzes the audience share of New Release, Mid-Term, and Veteran movies by comparing the opening date and reference date.")
         
         movie_age_df, total_audience = analyze_movie_age(movie_records, target_date_dt)
         
         if not movie_age_df.empty:
-            st.markdown(f"**총 분석 관객 수:** {total_audience:,.0f} 명")
+            st.markdown(f"**Total Audience Analyzed:** {total_audience:,.0f} people")
             
-            # 도넛 차트 (Plotly)
             fig_pie = px.pie(
                 movie_age_df,
                 values='Total_Audience',
                 names='Age_Group',
-                title='시장 관객 수 점유율 (영화 연령별)',
+                title='Market Audience Share by Movie Age',
                 color_discrete_sequence=px.colors.qualitative.Bold
             )
             fig_pie.update_traces(textinfo='percent+label', marker=dict(line=dict(color='#000000', width=1)))
-            st.plotly_chart(fig_pie, use_container_width=True)             
-            # 데이터 테이블
+            st.plotly_chart(fig_pie, use_container_width=True) 
+            
             display_age_df = movie_age_df.rename(columns={
-                'Age_Group': '영화 연령 그룹',
-                'Movie_Count': '그룹 내 영화 수',
-                'Total_Audience_Formatted': '총 관객 수 (명)',
-                'Audience_Share_Formatted': '관객 점유율',
-            })[['영화 연령 그룹', '그룹 내 영화 수', '총 관객 수 (명)', '관객 점유율']]
+                'Age_Group': 'Movie Age Group',
+                'Movie_Count': 'Total Movies in Group',
+                'Total_Audience_Formatted': 'Total Audience (people)',
+                'Audience_Share_Formatted': 'Audience Share',
+            })[['Movie Age Group', 'Total Movies in Group', 'Total Audience (people)', 'Audience Share']]
             st.dataframe(display_age_df, use_container_width=True, hide_index=False)
             
-            # 💡 수정: 영화 목록 상세 정보 출력
             st.markdown("---")
-            st.subheader("🎬 연령 그룹별 상세 참여 영화 목록")
+            st.subheader("🎬 Detailed List of Movies per Age Group")
             for index, row in movie_age_df.iterrows():
                 name = row['Age_Group']
                 movie_list = row['Movie_List'] 
-                with st.expander(f"**#{index}: {name} ({row['Movie_Count']}편)**", expanded=False):
-                    st.markdown("- " + "\n- ".join(movie_list) if movie_list else "분석 기간 내 흥행 기록이 있는 참여 영화가 없습니다.")
+                with st.expander(f"**#{index}: {name} ({row['Movie_Count']} movies)**", expanded=False):
+                    st.markdown("- " + "\n- ".join(movie_list) if movie_list else "No box office record movies found in this age group.")
 
         else:
-            st.warning("분석할 연령 데이터가 없습니다. (개봉일 정보가 누락되었거나, 흥행 영화가 없습니다.)")
+            st.warning("No movie age data for analysis.")
             
-    # Tab 5: 흥행 안정성 분석 (새로 추가)
+    # Tab 5: Stability Analysis (Rank Change)
     with tab5:
-        st.subheader("📉 주간 순위 변동을 통한 흥행 안정성 분석")
-        st.markdown("주간 박스오피스 상위 100개 영화 중 순위 변동 폭이 가장 작은 영화(안정적인 흥행작) 순위를 분석합니다.")
+        st.subheader("📉 Stability Analysis via Weekly Rank Change")
+        st.markdown("Analyzes the rank of the most stable hit movies among the top 100 based on the absolute change in weekly rank.")
         
         stability_df = analyze_stability_rank(movie_records)
         
         if not stability_df.empty:
-            st.markdown(f"**기준:** 순위 변동 폭 (`abs(rankInten)`)이 낮을수록 안정적이며, 1위입니다.")
+            st.markdown(f"**Criterion:** Lower absolute rank change (`abs(rankInten)`) means higher stability, ranking #1.")
             
-            # 💡 막대 그래프 대신 순위 변동을 나타내는 테이블이 더 적합합니다.
             display_stability_df = stability_df.rename(columns={
-                'movieNm': '영화 제목',
-                'Total_Audience_Formatted': '누적 관객 수',
-                'Rank_Inten_Formatted': '순위 변동',
-                'openDt': '개봉일',
-            })[['영화 제목', '누적 관객 수', '순위 변동', '개봉일']]
+                'movieNm': 'Movie Title',
+                'Total_Audience_Formatted': 'Cumulative Audience',
+                'Rank_Inten_Formatted': 'Rank Change',
+                'openDt': 'Open Date',
+            })[['Movie Title', 'Cumulative Audience', 'Rank Change', 'Open Date']]
             
             st.dataframe(display_stability_df, use_container_width=True, hide_index=False)
             
         else:
-            st.warning("분석할 흥행 안정성 데이터가 없습니다. (순위 변동 정보가 없거나, 유효한 흥행 영화가 없습니다.)")
+            st.warning("No stability data for analysis. (Rank change information is missing or no valid hit movies were found.)")
+
+    # Tab 6: Daily Trend Analysis (New Feature)
+    with tab6:
+        st.subheader("📅 Daily Trend Analysis: Weekend vs. Weekday Reliance")
+        st.markdown("Analyzes the audience split between weekdays (Mon-Fri) and weekends (Sat-Sun) to determine the movie's reliance on weekend traffic.")
+        
+        daily_trend_df = analyze_daily_trend(movie_records)
+        
+        if not daily_trend_df.empty:
+            st.markdown("**Criterion:** Sorted by Weekend Dependency Ratio (Highest ratio = highest weekend reliance).")
+
+            # Plotly Bar Chart: Weekend Dependency Ratio
+            fig_bar = px.bar(
+                daily_trend_df.head(15), # Show Top 15 movies by weekend dependency
+                x='Weekend_Dependency_Ratio',
+                y='Movie_Name',
+                orientation='h',
+                title='Top 15 Movies by Weekend Dependency Ratio',
+                color='Weekend_Dependency_Ratio',
+                color_continuous_scale=px.colors.sequential.Viridis,
+                hover_data={'Total_Weekly_Audience': ':.0f', 'Weekend_Dependency_Ratio': ':.1f'}
+            )
+            
+            fig_bar.update_layout(
+                xaxis_title="Weekend Dependency Ratio (%)", 
+                yaxis_title="Movie Title", 
+                yaxis={'categoryorder': 'total ascending'},
+                height=500
+            )
+            st.plotly_chart(fig_bar, use_container_width=True) 
+            
+            # Data Table
+            display_daily_df = daily_trend_df.rename(columns={
+                'Movie_Name': 'Movie Title',
+                'Total_Weekly_Audience': 'Total Weekly Audience',
+                'Weekend_Audience': 'Weekend Audience (Sat-Sun)',
+                'Weekday_Audience': 'Weekday Audience (Mon-Fri)',
+                'Weekend_Dependency_Formatted': 'Weekend Dependency (%)',
+                'Open_Date': 'Open Date'
+            })[['Movie Title', 'Total Weekly Audience', 'Weekend Audience (Sat-Sun)', 'Weekday Audience (Mon-Fri)', 'Weekend Dependency (%)']]
+            
+            st.dataframe(display_daily_df, use_container_width=True, hide_index=False)
+
+        else:
+            st.warning("No daily audience data found for analysis. This may indicate a temporary issue with the API or data collection.")
 
 
 if __name__ == "__main__":
