@@ -86,7 +86,6 @@ def fetch_movie_details(detail_key, movie_code):
 def get_full_analysis_data(boxoffice_key, detail_key, target_date):
     """
     1, 2단계 API 호출을 통합하고 데이터 분석을 위한 DataFrame을 생성합니다.
-    (최소 개봉 연도 필터링 로직 제거 - 연도 필터링은 이제 사용하지 않음)
     """
     
     if not boxoffice_key or not detail_key:
@@ -414,6 +413,7 @@ def analyze_stability_rank(movie_records):
     df.index.name = 'Rank'
     
     # 💡 표시용 컬럼 포맷팅
+    # movieNm은 rename이 아닌, 원래 컬럼명으로 존재해야 함.
     df['Total_Audience_Formatted'] = df['audiCnt'].apply(lambda x: f"{x:,.0f} 명")
     df['Rank_Inten_Formatted'] = df['rankInten'].apply(lambda x: f"{x:+d}") # +d를 사용하여 부호 표시 (+5, -3)
     
@@ -523,13 +523,16 @@ def main():
                     # Plotly bar chart
                     fig = px.bar(
                         top_df,
-                        x='Total_Audience', 
+                        x='Sort_Index', # 정수 값인 Sort_Index 사용
                         y='Rank_Name', # 순위+이름 조합 컬럼 사용
                         orientation='h',
                         title=f"Top {top_n} {entity_selection} Total Audience Count (기준일: {target_date_str})",
-                        color='Total_Audience',
+                        color='Sort_Index',
                         color_continuous_scale=px.colors.sequential.Teal,
-                        hover_data={'Total_Audience': ':.0f', 'Movie_Count': True}
+                        hover_data={
+                            'Sort_Index': ':.0f', # 툴팁에 포맷팅되지 않은 값 대신 Sort_Index 사용
+                            'Movie_Count': True
+                        }
                     ) 
                     
                     # Y축 순서를 데이터프레임의 순서(1위부터 30위까지)와 일치시키고,
@@ -546,7 +549,6 @@ def main():
                             'autorange': 'reversed' 
                         }, 
                         # X축: 값이 클수록 막대가 길어지도록 정방향으로 설정 (가장 긴 막대가 가장 큰 값)
-                        # 💡 수정: X축의 최솟값을 0으로 강제
                         xaxis={
                              # X축 범위를 0부터 데이터 최대값의 1.1배까지 설정하여 0에서 시작하도록 강제
                              'range': [0, top_df['Sort_Index'].max() * 1.1] 
@@ -558,7 +560,7 @@ def main():
                     display_df = top_df.rename(columns={
                         'Name': '이름',
                         'Movie_Count': '총 참여 영화 수',
-                        'Total_Audience': '총 관객 수 (명)',
+                        'Total_Audience_Formatted': '총 관객 수 (명)',
                     })[['이름', '총 참여 영화 수', '총 관객 수 (명)']] 
                     
                     st.dataframe(display_df, use_container_width=True, hide_index=True)
@@ -690,7 +692,7 @@ def main():
                 'Total_Audience_Formatted': '누적 관객 수',
                 'Rank_Inten_Formatted': '순위 변동',
                 'openDt': '개봉일',
-            })[['영화 제목', '누적 관객 수', '순위 변동', 'openDt']]
+            })[['영화 제목', '누적 관객 수', '순위 변동', '개봉일']]
             
             st.dataframe(display_stability_df, use_container_width=True, hide_index=False)
             
