@@ -16,7 +16,7 @@ from datetime import datetime, timedelta
 # 1. 주간/주말 박스오피스 키 (흥행 영화 목록 가져오기)
 KOBIS_BOXOFFICE_KEY = "f6ae9fdbd8ba038eda177250d3e57b4c" 
 
-# 2. 영화 상세 정보 (DETAIL) 키: 감독/회사 정보 가져오기
+# 2. 영화 상세 정보 (DETAIL) 키: 감독/회사 정보 가져오기)
 KOBIS_DETAIL_KEY = "f6ae9fdbd8ba038eda177250d3e57b4c" 
 # -----------------------------------------------------------
 
@@ -189,7 +189,7 @@ def get_full_analysis_data(boxoffice_key, detail_key, target_date):
     return movie_records
 
 def analyze_hitmaker_index(movie_records, entity_type='Director'):
-    """감독 또는 회사의 총 관객 수 기여도를 분석합니다. (총 관객 수 기준 Top 30)"""
+    """감독 또는 회사의 총 관객 수 기여도를 분석합니다. (총 관객 수 기준 Top 10)"""
     entity_data = defaultdict(lambda: {
         'total_audience': 0, 
         'movie_count': 0, 
@@ -589,17 +589,17 @@ def main():
                 analysis_df = analyze_hitmaker_index(movie_records, entity_selection)
                 
                 if not analysis_df.empty:
-                    top_n = 30 
+                    top_n = 10 # 💡 Top 10으로 수정
                     top_df = analysis_df.head(top_n).copy()
                     
-                    st.subheader(f"🏆 Top {top_n} {entity_display} 흥행 분석 (총 관객 수)")
+                    st.subheader(f"🏆 Top {top_n} {entity_display} 흥행 분석 (총 관객 수)") # 💡 Top 10으로 수정
                     
                     fig = px.bar(
                         top_df,
                         x='Sort_Index', 
                         y='Rank_Name', 
                         orientation='h',
-                        title=f"Top {top_n} {entity_display} 총 관객 수 (기준일: {target_date_str})",
+                        title=f"Top {top_n} {entity_display} 총 관객 수 (기준일: {target_date_str})", # 💡 Top 10으로 수정
                         color='Sort_Index',
                         color_continuous_scale=px.colors.sequential.Teal,
                         hover_data={'Sort_Index': ':.0f', 'Movie_Count': True}
@@ -768,7 +768,7 @@ def main():
         else:
             st.warning("분석할 연령 데이터가 없습니다. (개봉일 정보가 누락되었거나, 흥행 영화가 없습니다.)")
             
-    # Tab 5: 흥행 안정성 분석 (새로 추가)
+    # Tab 5: 흥행 안정성 분석
     with tab5:
         st.subheader("📉 주간 순위 변동을 통한 흥행 안정성 분석")
         st.markdown("주간 박스오피스 상위 100개 영화 중 순위 변동 폭이 가장 작은 영화(안정적인 흥행작) 순위를 분석합니다.")
@@ -817,9 +817,11 @@ def main():
 
             top_daily_names_in_order = daily_trend_df['Rank_Name'].head(15).tolist()
 
+            # 💡 수정: 그래프 순서 재조정 (Y축의 순위와 막대 길이가 일치하도록)
             fig_bar.update_layout(
                 xaxis_title="주말 의존도 비율 (%)", 
                 yaxis_title="영화 제목", 
+                # Y축: 순위대로 정렬 (1위가 가장 위에 오도록 reversed)
                 yaxis={
                     'categoryorder': 'array',
                     'categoryarray': top_daily_names_in_order,
@@ -830,7 +832,7 @@ def main():
             )
             st.plotly_chart(fig_bar, use_container_width=True) 
             
-            # Data Table
+            # Data Table: 순위가 맞게 정렬되었으므로, 이름을 바꿔서 출력합니다.
             display_daily_df = daily_trend_df.rename(columns={
                 'Movie_Name': '영화 제목',
                 'Total_Weekly_Audience': '총 주간 관객 수',
