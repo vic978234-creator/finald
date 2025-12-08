@@ -242,7 +242,7 @@ def analyze_genre_trends(movie_records):
     """
     수집된 데이터를 기반으로 장르별 흥행 트렌드(총 관객 수, 영화 수, 점유율)를 계산합니다.
     """
-    genre_data = defaultdict(lambda: {'total_audience': 0, 'movie_count': 0})
+    genre_data = defaultdict(lambda: {'total_audience': 0, 'movie_count': 0, 'movie_list': []})
     total_market_audience = sum(movie['audiCnt'] for movie in movie_records)
     
     for movie in movie_records:
@@ -256,16 +256,28 @@ def analyze_genre_trends(movie_records):
             genre_data[genre_name]['total_audience'] += audience
             genre_data[genre_name]['movie_count'] += 1
             
+            # 💡 수정: 영화 목록 저장
+            if audience > 0:
+                genre_data[genre_name]['movie_list'].append({
+                    'name': movie['movieNm'],
+                    'open_dt': movie['openDt']
+                })
+            
     results = []
     for name, data in genre_data.items():
         if data['total_audience'] > 0:
             share = (data['total_audience'] / total_market_audience) * 100 if total_market_audience > 0 else 0
             
+            # 💡 수정: 영화 목록을 표시용 문자열로 변환
+            sorted_movies = sorted(data['movie_list'], key=lambda x: x['open_dt'], reverse=True)
+            movie_display_list = [f"{m['name']} ({m['open_dt'][:4]})" for m in sorted_movies]
+            
             results.append({
                 'Genre_Name': name,
                 'Total_Audience': int(data['total_audience']),
                 'Movie_Count': data['movie_count'],
-                'Audience_Share_Percentage': share
+                'Audience_Share_Percentage': share,
+                'Movie_List': movie_display_list # 영화 목록 추가
             })
 
     if not results:
@@ -284,7 +296,7 @@ def analyze_rating_impact(movie_records):
     """
     수집된 데이터를 기반으로 등급별 흥행 효과(평균 관객 수, 점유율)를 계산합니다.
     """
-    rating_data = defaultdict(lambda: {'total_audience': 0, 'movie_count': 0})
+    rating_data = defaultdict(lambda: {'total_audience': 0, 'movie_count': 0, 'movie_list': []})
     total_market_audience = sum(movie['audiCnt'] for movie in movie_records)
     
     for movie in movie_records:
@@ -296,6 +308,12 @@ def analyze_rating_impact(movie_records):
 
         rating_data[rating]['total_audience'] += audience
         rating_data[rating]['movie_count'] += 1
+        
+        # 💡 수정: 영화 목록 저장
+        rating_data[rating]['movie_list'].append({
+            'name': movie['movieNm'],
+            'open_dt': movie['openDt']
+        })
             
     results = []
     for name, data in rating_data.items():
@@ -303,12 +321,17 @@ def analyze_rating_impact(movie_records):
             avg_audience = data['total_audience'] / data['movie_count']
             share = (data['total_audience'] / total_market_audience) * 100 if total_market_audience > 0 else 0
             
+            # 💡 수정: 영화 목록을 표시용 문자열로 변환
+            sorted_movies = sorted(data['movie_list'], key=lambda x: x['open_dt'], reverse=True)
+            movie_display_list = [f"{m['name']} ({m['open_dt'][:4]})" for m in sorted_movies]
+            
             results.append({
                 'Rating_Name': name,
                 'Total_Audience': int(data['total_audience']),
                 'Movie_Count': data['movie_count'],
                 'Avg_Audience': int(avg_audience),
-                'Audience_Share_Percentage': share
+                'Audience_Share_Percentage': share,
+                'Movie_List': movie_display_list # 영화 목록 추가
             })
 
     if not results:
@@ -330,7 +353,7 @@ def analyze_movie_age(movie_records, target_date):
     개봉일과 기준일을 비교하여 영화 연령대별 흥행을 분석합니다.
     (그룹 이름을 신작, 중기작, 장기작으로 변경)
     """
-    age_data = defaultdict(lambda: {'total_audience': 0, 'movie_count': 0})
+    age_data = defaultdict(lambda: {'total_audience': 0, 'movie_count': 0, 'movie_list': []})
     total_market_audience = sum(movie['audiCnt'] for movie in movie_records)
     
     for movie in movie_records:
@@ -357,17 +380,28 @@ def analyze_movie_age(movie_records, target_date):
             
         age_data[age_group]['total_audience'] += audience
         age_data[age_group]['movie_count'] += 1
+        
+        # 💡 수정: 영화 목록 저장
+        age_data[age_group]['movie_list'].append({
+            'name': movie['movieNm'],
+            'open_dt': movie['openDt']
+        })
             
     results = []
     for name, data in age_data.items():
         if data['total_audience'] > 0:
             share = (data['total_audience'] / total_market_audience) * 100 if total_market_audience > 0 else 0
             
+            # 💡 수정: 영화 목록을 표시용 문자열로 변환
+            sorted_movies = sorted(data['movie_list'], key=lambda x: x['open_dt'], reverse=True)
+            movie_display_list = [f"{m['name']} ({m['open_dt'][:4]})" for m in sorted_movies]
+            
             results.append({
                 'Age_Group': name,
                 'Total_Audience': int(data['total_audience']),
                 'Movie_Count': data['movie_count'],
-                'Audience_Share_Percentage': share
+                'Audience_Share_Percentage': share,
+                'Movie_List': movie_display_list # 영화 목록 추가
             })
 
     if not results:
@@ -642,6 +676,16 @@ def main():
                 'Audience_Share_Formatted': '관객 점유율',
             })[['관람 등급', '총 참여 영화 수', '평균 관객 수 (명)', '총 관객 수 (명)', '관객 점유율']]
             st.dataframe(display_rating_df, use_container_width=True, hide_index=False)
+            
+            # 💡 수정: 영화 목록 상세 정보 출력
+            st.markdown("---")
+            st.subheader("🎬 등급별 상세 참여 영화 목록")
+            for index, row in rating_df.iterrows():
+                name = row['Rating_Name']
+                movie_list = row['Movie_List'] 
+                with st.expander(f"**#{index}: {name} ({row['Movie_Count']}편)**", expanded=False):
+                    st.markdown("- " + "\n- ".join(movie_list) if movie_list else "분석 기간 내 흥행 기록이 있는 참여 영화가 없습니다.")
+
         else:
             st.warning("분석할 등급 데이터가 없습니다. (KOBIS API에서 등급 정보가 누락되었거나, 흥행 영화가 없습니다.)")
 
@@ -673,6 +717,16 @@ def main():
                 'Audience_Share_Formatted': '관객 점유율',
             })[['영화 연령 그룹', '그룹 내 영화 수', '총 관객 수 (명)', '관객 점유율']]
             st.dataframe(display_age_df, use_container_width=True, hide_index=False)
+            
+            # 💡 수정: 영화 목록 상세 정보 출력
+            st.markdown("---")
+            st.subheader("🎬 연령 그룹별 상세 참여 영화 목록")
+            for index, row in movie_age_df.iterrows():
+                name = row['Age_Group']
+                movie_list = row['Movie_List'] 
+                with st.expander(f"**#{index}: {name} ({row['Movie_Count']}편)**", expanded=False):
+                    st.markdown("- " + "\n- ".join(movie_list) if movie_list else "분석 기간 내 흥행 기록이 있는 참여 영화가 없습니다.")
+
         else:
             st.warning("분석할 연령 데이터가 없습니다. (개봉일 정보가 누락되었거나, 흥행 영화가 없습니다.)")
             
