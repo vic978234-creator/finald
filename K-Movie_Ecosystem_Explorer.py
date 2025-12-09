@@ -9,7 +9,7 @@ import plotly.graph_objects as go # Plotly for advanced charts
 
 # ⚠️ 경고: API 키가 공개적으로 노출됩니다!
 # 여기에 발급받은 실제 KOFIC API 키를 입력하세요.
-KOFIC_API_KEY = "여기에_당신의_KOFIC_API_키를_직접_입력하세요" 
+KOFIC_API_KEY = "https://www.kobis.or.kr/kobisopenapi/homepg/apikey/ckUser/saveApikeyForm.do?apiKey=f6ae9fdbd8ba038eda177250d3e57b4c" 
 
 KOFIC_API_URL = "http://www.kobis.or.kr/kobisopenapi/webservice/rest/boxoffice/searchWeeklyBoxOfficeList.json"
 
